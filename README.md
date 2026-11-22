@@ -21,23 +21,48 @@ artwork, 30-second previews and "Open in Apple Music" links.
 
 ## Features
 - **Discover**: live top-songs chart, plus search across the whole Apple Music catalog (storefront picker)
-- **My List**: your full ranked list with scores, filter by text or by group
+- **My List**: switch between **Songs**, **Artists** and **Albums**. Artists and albums show the
+  **average score** of the songs you've ranked from them, and update every time you rank another one.
+  After each ranking you see the new artist and album averages. Tap an artist or album to see its songs.
+- **Accounts**: sign up or sign in to sync your list across devices. Guest rankings move into a new
+  account automatically. Profiles are public by default (toggle in Profile), so you can
+  share `?u=username` links, find people by name, and see a "% taste match" on friends' lists.
+- **Apple Music linking** (MusicKit): rank straight from your *Recently played* and *Library*,
+  play full songs with a subscription instead of 30-second previews, and save your top 25 as an
+  Apple Music playlist.
+- **Cover art**: high-resolution Apple artwork everywhere, with a generated placeholder if any
+  image fails to load. Missing art on older saved songs fills in automatically.
 - **Later**: a want-to-listen bookmark list
 - **Profile**: stats, top artists and genres, export/import JSON, reset
 - Tap any artwork to play the 30-second preview
-- Installable as a PWA. Data is stored locally in the browser.
+- Installable as a PWA
 
 ## Run it
-It's a static site with no build step:
+Requires Node 22.5+, with no `npm install` needed (it uses Node's built-in SQLite).
 
 ```sh
-python3 -m http.server 8000   # then open http://localhost:8000
+npm start            # http://localhost:3000
 ```
 
-Or deploy the folder to any static host (GitHub Pages, Netlify, Vercel).
+Accounts are stored in `data/encore.db` (set `DATABASE_PATH` to move it, and set `COOKIE_SECURE=1` behind HTTPS).
+Deploy to any host that runs Node with a persistent disk (Render, Fly.io, Railway, a VPS).
+
+The static files still work on their own (for example on GitHub Pages) in guest-only mode, without accounts or Apple Music linking.
+
+### Turning on "Connect Apple Music"
+Apple requires a MusicKit developer token, which needs an Apple Developer Program membership:
+
+1. Go to developer.apple.com → Certificates, Identifiers & Profiles → **Identifiers** and create a
+   *Media ID* with MusicKit enabled.
+2. Go to **Keys**, create a key with *Media Services (MusicKit)*, and download the `.p8` file. Note the Key ID.
+3. Start the server with:
+   ```sh
+   APPLE_TEAM_ID=ABCDE12345 APPLE_KEY_ID=XYZ987TUV1 APPLE_PRIVATE_KEY_PATH=./AuthKey_XYZ987TUV1.p8 npm start
+   ```
+The server signs short-lived tokens. Your private key never reaches the browser. Never commit the `.p8` file (it is in `.gitignore`).
 
 ## Tests
 ```sh
-node --test tests/ranking.test.js   # ranking engine
-node tests/e2e.js                   # UI flow in Chromium, Apple API mocked (needs playwright)
+npm test            # ranking engine + server (accounts, sync, profiles, Apple token)
+node tests/e2e.js   # full UI flow in Chromium against a real server, Apple catalog mocked (needs playwright)
 ```

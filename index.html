@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cut" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f0f14" />
   <title>Encore — Rank Your Songs</title>
   <link rel="manifest" href="manifest.webmanifest" />
@@ -12,7 +12,10 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="logo">♪</span> Encore</div>
-    <select id="country" class="country" aria-label="Apple Music storefront"></select>
+    <div class="topbar-right">
+      <select id="country" class="country" aria-label="Apple Music storefront"></select>
+      <button id="account-btn" class="account-btn">Sign in</button>
+    </div>
   </header>
 
   <main>
@@ -20,6 +23,11 @@
     <section id="view-discover" class="view active">
       <div class="searchbar">
         <input id="search" type="search" placeholder="Search every song on Apple Music…" autocomplete="off" />
+        <div class="chips" id="source-chips">
+          <button class="chip active" data-source="charts">Top charts</button>
+          <button class="chip am-only hidden" data-source="recent"> Recently played</button>
+          <button class="chip am-only hidden" data-source="library"> My library</button>
+        </div>
       </div>
       <h2 id="results-title" class="section-title">Top songs right now</h2>
       <ul id="results" class="song-list"></ul>
@@ -30,16 +38,25 @@
     <section id="view-list" class="view">
       <div class="list-head">
         <h2 class="section-title">My Rankings <span id="list-count" class="count"></span></h2>
-        <input id="list-filter" type="search" placeholder="Filter by title, artist, genre…" />
+        <div class="seg" id="list-seg">
+          <button class="active" data-seg="songs">Songs</button>
+          <button data-seg="artists">Artists</button>
+          <button data-seg="albums">Albums</button>
+        </div>
+        <input id="list-filter" type="search" placeholder="Filter by title, artist, album, genre…" />
         <div class="chips" id="bucket-chips">
           <button class="chip active" data-bucket="all">All</button>
           <button class="chip" data-bucket="liked">Loved</button>
           <button class="chip" data-bucket="fine">Fine</button>
           <button class="chip" data-bucket="disliked">Didn't like</button>
         </div>
+        <div class="chips hidden" id="group-sort">
+          <button class="chip active" data-sort="avg">Highest average</button>
+          <button class="chip" data-sort="count">Most ranked</button>
+        </div>
       </div>
       <ol id="ranked" class="song-list ranked"></ol>
-      <p id="ranked-empty" class="empty hidden">No songs ranked yet. Search for a song in <b>Discover</b> and tap <b>+</b> to rank it.</p>
+      <p id="ranked-empty" class="empty hidden"></p>
     </section>
 
     <!-- WANT TO LISTEN -->
@@ -49,14 +66,43 @@
       <p id="later-empty" class="empty hidden">Bookmark songs (🔖) to save them here for later.</p>
     </section>
 
+    <!-- ANOTHER USER'S PROFILE -->
+    <section id="view-user" class="view">
+      <button class="back" id="user-back">‹ Back</button>
+      <div class="user-head">
+        <div class="avatar big" id="user-avatar"></div>
+        <div>
+          <h2 class="section-title tight" id="user-name"></h2>
+          <div class="muted" id="user-sub"></div>
+        </div>
+      </div>
+      <div class="seg" id="user-seg">
+        <button class="active" data-seg="songs">Songs</button>
+        <button data-seg="artists">Artists</button>
+        <button data-seg="albums">Albums</button>
+      </div>
+      <ol id="user-list" class="song-list ranked"></ol>
+      <p id="user-empty" class="empty hidden"></p>
+    </section>
+
     <!-- PROFILE -->
     <section id="view-profile" class="view">
+      <div class="card-box" id="account-card"></div>
+      <div class="card-box" id="am-card"></div>
+
       <h2 class="section-title">Your Taste</h2>
       <div class="stats" id="stats"></div>
       <h3 class="sub-title">Top artists</h3>
-      <ol id="top-artists" class="mini-list"></ol>
-      <h3 class="sub-title">Top genres</h3>
-      <ol id="top-genres" class="mini-list"></ol>
+      <ol id="top-artists" class="song-list"></ol>
+      <h3 class="sub-title">Top albums</h3>
+      <ol id="top-albums" class="song-list"></ol>
+
+      <div id="people-box">
+        <h3 class="sub-title">Find people</h3>
+        <input id="people-search" type="search" placeholder="Search Encore users by name…" autocomplete="off" />
+        <ul id="people-results" class="people"></ul>
+      </div>
+
       <h3 class="sub-title">Data</h3>
       <div class="row-buttons">
         <button id="export" class="btn">Export list</button>
@@ -73,7 +119,6 @@
     <button class="tab" data-view="profile"><span>👤</span>Profile</button>
   </nav>
 
-  <!-- RANKING FLOW MODAL -->
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="sheet">
       <button class="close" id="modal-close" aria-label="Close">✕</button>
