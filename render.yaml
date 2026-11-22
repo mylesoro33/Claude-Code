@@ -1,0 +1,21 @@
+# One-click deploy on Render: https://render.com/deploy
+services:
+  - type: web
+    name: encore
+    runtime: node
+    plan: free
+    buildCommand: "true"
+    startCommand: npm start
+    healthCheckPath: /api/me
+    envVars:
+      - key: NODE_VERSION
+        value: "22.23.0"
+      - key: COOKIE_SECURE
+        value: "1"
+      # Optional — turns on "Connect Apple Music" (see README):
+      - key: APPLE_TEAM_ID
+        sync: false
+      - key: APPLE_KEY_ID
+        sync: false
+      - key: APPLE_PRIVATE_KEY
+        sync: false
