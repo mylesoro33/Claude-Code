@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cut" />
+  <meta name="theme-color" content="#0f0f14" />
+  <title>Encore — Rank Your Songs</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">♪</span> Encore</div>
+    <select id="country" class="country" aria-label="Apple Music storefront"></select>
+  </header>
+
+  <main>
+    <!-- DISCOVER -->
+    <section id="view-discover" class="view active">
+      <div class="searchbar">
+        <input id="search" type="search" placeholder="Search every song on Apple Music…" autocomplete="off" />
+      </div>
+      <h2 id="results-title" class="section-title">Top songs right now</h2>
+      <ul id="results" class="song-list"></ul>
+      <p id="results-empty" class="empty hidden"></p>
+    </section>
+
+    <!-- MY LIST -->
+    <section id="view-list" class="view">
+      <div class="list-head">
+        <h2 class="section-title">My Rankings <span id="list-count" class="count"></span></h2>
+        <input id="list-filter" type="search" placeholder="Filter by title, artist, genre…" />
+        <div class="chips" id="bucket-chips">
+          <button class="chip active" data-bucket="all">All</button>
+          <button class="chip" data-bucket="liked">Loved</button>
+          <button class="chip" data-bucket="fine">Fine</button>
+          <button class="chip" data-bucket="disliked">Didn't like</button>
+        </div>
+      </div>
+      <ol id="ranked" class="song-list ranked"></ol>
+      <p id="ranked-empty" class="empty hidden">No songs ranked yet. Search for a song in <b>Discover</b> and tap <b>+</b> to rank it.</p>
+    </section>
+
+    <!-- WANT TO LISTEN -->
+    <section id="view-later" class="view">
+      <h2 class="section-title">Want to Listen <span id="later-count" class="count"></span></h2>
+      <ul id="later" class="song-list"></ul>
+      <p id="later-empty" class="empty hidden">Bookmark songs (🔖) to save them here for later.</p>
+    </section>
+
+    <!-- PROFILE -->
+    <section id="view-profile" class="view">
+      <h2 class="section-title">Your Taste</h2>
+      <div class="stats" id="stats"></div>
+      <h3 class="sub-title">Top artists</h3>
+      <ol id="top-artists" class="mini-list"></ol>
+      <h3 class="sub-title">Top genres</h3>
+      <ol id="top-genres" class="mini-list"></ol>
+      <h3 class="sub-title">Data</h3>
+      <div class="row-buttons">
+        <button id="export" class="btn">Export list</button>
+        <label class="btn">Import list<input id="import" type="file" accept="application/json" hidden /></label>
+        <button id="reset" class="btn danger">Reset everything</button>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab active" data-view="discover"><span>🔍</span>Discover</button>
+    <button class="tab" data-view="list"><span>🏆</span>My List</button>
+    <button class="tab" data-view="later"><span>🔖</span>Later</button>
+    <button class="tab" data-view="profile"><span>👤</span>Profile</button>
+  </nav>
+
+  <!-- RANKING FLOW MODAL -->
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="sheet">
+      <button class="close" id="modal-close" aria-label="Close">✕</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <audio id="player" preload="none"></audio>
+
+  <script src="ranking.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
