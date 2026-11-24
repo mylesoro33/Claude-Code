@@ -45,3 +45,19 @@ test('re-ranking moves a song between buckets and tie places at midpoint', () =>
   assert.strictEqual(R.nextOpponent(t), null);
   assert.deepStrictEqual(R.commit(r, t).liked, ['b', 'x', 'c']);
 });
+
+test('move (drag-to-rank) reorders and re-files across bucket boundaries', () => {
+  const r = { liked: ['a', 'b', 'c'], fine: ['d', 'e'], disliked: ['f'] };
+  // c → top
+  assert.deepStrictEqual(R.move(r, 'c', 0).rankings, { liked: ['c', 'a', 'b'], fine: ['d', 'e'], disliked: ['f'] });
+  // a → between d and e (flat index 3 after removal: b,c,d | e,f) becomes "fine"
+  const m = R.move(r, 'a', 3);
+  assert.strictEqual(m.bucket, 'fine');
+  assert.deepStrictEqual(m.rankings, { liked: ['b', 'c'], fine: ['d', 'a', 'e'], disliked: ['f'] });
+  // f → very top joins "liked"
+  assert.deepStrictEqual(R.move(r, 'f', 0).rankings.liked, ['f', 'a', 'b', 'c']);
+  // dragging to the very end joins the last song's bucket
+  assert.deepStrictEqual(R.move(r, 'a', 99).rankings.disliked, ['f', 'a']);
+  // unknown id is a no-op
+  assert.strictEqual(R.move(r, 'zz', 0).rankings, r);
+});

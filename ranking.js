@@ -86,6 +86,24 @@
     return out;
   }
 
+  /**
+   * Drag-to-rank: move a song to `index` in the flat best → worst order.
+   * The song joins the bucket of the song now right above it (or, at the very
+   * top, the bucket of the song below it), so dragging across a boundary
+   * re-files it. Returns { rankings, bucket }.
+   */
+  function move(rankings, songId, index) {
+    const flat = flatten(rankings).filter((e) => e.id !== songId);
+    if (flat.length === flatten(rankings).length) return { rankings, bucket: null };
+    const i = Math.max(0, Math.min(index, flat.length));
+    const neighbor = flat[i - 1] || flat[i];
+    const bucket = neighbor ? neighbor.bucket : bucketOf(rankings, songId);
+    flat.splice(i, 0, { id: songId, bucket });
+    const out = emptyRankings();
+    flat.forEach((e) => out[e.bucket].push(e.id));
+    return { rankings: out, bucket };
+  }
+
   function bucketOf(rankings, songId) {
     return BUCKETS.find((b) => rankings[b].includes(songId)) || null;
   }
@@ -94,7 +112,7 @@
     return Math.round(x * 10) / 10;
   }
 
-  const api = { BUCKETS, BANDS, emptyRankings, startPlacement, nextOpponent, answer, maxSteps, commit, remove, scoreFor, flatten, bucketOf };
+  const api = { BUCKETS, BANDS, emptyRankings, startPlacement, nextOpponent, answer, maxSteps, commit, remove, move, scoreFor, flatten, bucketOf };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Ranking = api;
 })(typeof self !== 'undefined' ? self : this);
