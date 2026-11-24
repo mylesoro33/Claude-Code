@@ -119,6 +119,12 @@ body.scrolled .masthead { border-bottom-color: var(--line); }
 .avatar { position: relative; display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; overflow: hidden; flex-shrink: 0; background: var(--ink-3); color: var(--cream); font-family: var(--display); font-weight: 800; font-size: var(--fs-sm); box-shadow: 0 0 0 2px var(--ink-0), 0 0 0 3px var(--line-2); }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
 .avatar .ico { width: 55%; height: 55%; color: var(--cream-3); }
+/* Default avatar: a record with an orange label */
+.avatar.vinyl-av { background: repeating-radial-gradient(circle at 50% 50%, #0b0908 0 1px, #1a1512 1px 2.4px); }
+.avatar.vinyl-av i { width: 36%; height: 36%; border-radius: 50%; background: var(--accent); box-shadow: inset 0 0 0 1.5px rgba(0, 0, 0, .25); position: relative; }
+.avatar.vinyl-av i::after { content: ''; position: absolute; inset: 40%; border-radius: 50%; background: var(--ink-0); }
+.avatar.xs { width: 22px; height: 22px; box-shadow: 0 0 0 1px var(--line-2); }
+.owned { display: flex; align-items: center; gap: 8px; }
 .avatar.xl { width: 96px; height: 96px; font-size: 2rem; box-shadow: 0 0 0 4px var(--vinyl), 0 0 0 5px var(--line-2), 0 0 0 11px var(--vinyl), 0 0 0 12px var(--line); }
 
 /* ---------- Vinyl ---------- */
@@ -252,6 +258,22 @@ textarea.input { resize: vertical; min-height: 84px; line-height: 1.4; }
 .btn[disabled] { opacity: .5; pointer-events: none; }
 .btn-row { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-4); }
 .btn-row.center { justify-content: center; }
+.icon-btn.on, .btn.fav-on { color: var(--accent); }
+.btn.fav-on { border-color: var(--accent); }
+.chart-meta { color: var(--cream-2); font-variant-numeric: tabular-nums; }
+.find-account { margin-top: var(--s-5); padding: var(--s-4); border: 1.5px dashed var(--line-2); border-radius: var(--r-ui); }
+.find-account h3 { margin: 0; font-family: var(--display); font-weight: 800; font-size: var(--fs-lg); font-variation-settings: 'SOFT' 100; }
+.find-account p { margin: 4px 0 var(--s-3); }
+.lookup-row { display: grid; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) auto; gap: var(--s-2); align-items: center; }
+.lookup-row select.input { min-height: 46px; padding-right: 4px; }
+@media (max-width: 420px) { .lookup-row { grid-template-columns: 1fr auto; } .lookup-row select { grid-column: 1 / -1; } }
+.pick-lists li.busy { opacity: .5; pointer-events: none; }
+code { font-size: .85em; padding: 1px 4px; border-radius: 3px; background: var(--ink-2); color: var(--cream); }
+.cropper { position: relative; width: 280px; height: 280px; margin: var(--s-3) auto; border-radius: var(--r-ui); overflow: hidden; touch-action: none; cursor: grab; }
+.cropper canvas { display: block; }
+.crop-ring { position: absolute; inset: 0; pointer-events: none; border-radius: 50%; box-shadow: 0 0 0 999px rgba(8, 5, 3, .6), inset 0 0 0 2px var(--accent); }
+.crop-zoom { display: grid; gap: 6px; max-width: 280px; margin: 0 auto; }
+.crop-zoom input { accent-color: var(--accent); }
 .icon-btn { position: relative; width: var(--tap); height: var(--tap); display: grid; place-items: center; color: var(--cream-2); border-radius: var(--r-ui); transition: color var(--dur-2), background var(--dur-2); }
 @media (hover: hover) { .icon-btn:hover { color: var(--cream); background: var(--ink-2); } }
 
@@ -378,7 +400,7 @@ textarea.input { resize: vertical; min-height: 84px; line-height: 1.4; }
 /* ---------- Turntable deck (now playing) ---------- */
 .deck {
   position: fixed; z-index: 39; left: 0; right: 0; bottom: calc(var(--tab-h) + var(--safe-b)); height: var(--deck-h);
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--s-3);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: var(--s-2);
   padding: 0 var(--gutter-r) 0 var(--gutter-l); background: #261b14; border-top: 1px solid var(--line-2); touch-action: pan-y;
   animation: deck-in var(--dur-3) var(--ease) both;
 }

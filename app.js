@@ -20,7 +20,7 @@
   // =====================================================================
   // State + persistence (guest = this browser; account = synced to server)
   // =====================================================================
-  const defaultState = () => ({ songs: {}, order: [], lists: [], connections: {}, ratedAt: {}, country: guessCountry() });
+  const defaultState = () => ({ songs: {}, order: [], lists: [], favorites: [], connections: {}, ratedAt: {}, country: guessCountry() });
   const sync = { server: false, awake: false, user: null, version: 0, dirty: false, timer: null, status: '', config: null };
   let state = defaultState();
 
@@ -39,6 +39,7 @@
     if (!out.ratedAt || !Object.keys(out.ratedAt).length) out.ratedAt = out.rankedAt || {};
     delete out.rankings; delete out.later; delete out.rankedAt;
     out.lists = Array.isArray(out.lists) ? out.lists : [];
+    out.favorites = Array.isArray(out.favorites) ? out.favorites : [];
     out.connections = out.connections && typeof out.connections === 'object' ? out.connections : {};
     return out;
   }
@@ -296,24 +297,6 @@
   }
   const avgLine = (g, label) => (g ? `<div class="avg-line">${sticker(g.avg)}<span><b>${esc(g.name)}</b> · your ${label} average across ${g.count} song${g.count > 1 ? 's' : ''}</span></div>` : '');
 
-  /** Apple genre names → chart genre keys. */
-  function genreKeyFor(name) {
-    const n = String(name || '').toLowerCase();
-    if (/k-?pop/.test(n)) return 'kpop';
-    if (/hip|rap/.test(n)) return 'hiphop';
-    if (/r&b|soul/.test(n)) return 'rnb';
-    if (/country/.test(n)) return 'country';
-    if (/latin|urbano|reggaeton|mexican/.test(n)) return 'latin';
-    if (/dance|electronic|edm|house/.test(n)) return 'edm';
-    if (/indie/.test(n)) return 'indie';
-    if (/alternative/.test(n)) return 'alternative';
-    if (/rock|metal/.test(n)) return 'rock';
-    if (/jazz/.test(n)) return 'jazz';
-    if (/gospel|christian/.test(n)) return 'gospel';
-    if (/pop/.test(n)) return 'pop';
-    return null;
-  }
-
   // =====================================================================
   // Rows
   // =====================================================================
@@ -341,9 +324,9 @@
         <div class="meta" data-act="open">
           <div class="t1">${esc(song.title)}${song.explicit ? '<span class="e" aria-label="Explicit">E</span>' : ''}</div>
           <div class="t2">${esc(song.artist)}</div>
-          ${o.why ? `<div class="why">${esc(o.why)}</div>` : `<div class="t3">${esc(song.album)}${song.year ? ' · ' + song.year : ''}</div>`}
+          ${o.why ? `<div class="why">${esc(o.why)}</div>` : o.meta !== undefined ? `<div class="t3 chart-meta">${esc(o.meta)}</div>` : `<div class="t3">${esc(song.album)}${song.year ? ' · ' + song.year : ''}</div>`}
         </div>
-        <div class="actions">${right}</div>
+        ${o.noActions ? '' : `<div class="actions">${right}</div>`}
       </div>`;
     return li;
   }
@@ -380,9 +363,13 @@
         if (g) openGroup(g, ul._data || mineData(), $('.pack', li));
         return;
       }
-      const song = lookup(li.dataset.id);
+      let song = lookup(li.dataset.id);
       if (!song) return;
       const act = btn.dataset.act;
+      if (song.pending && ['play', 'rate', 'list', 'open'].includes(act)) {
+        ensureSong(song).then((real) => { if (!real) return; if (act === 'play') playFrom(real, [real]); else if (act === 'rate') startRating(real); else if (act === 'list') openAddToList(real); else openDetail(real); });
+        return;
+      }
       if (act === 'play') playFrom(song, listSongs(ul, lookup));
       else if (act === 'rate') startRating(song);
       else if (act === 'list') openAddToList(song);
@@ -469,47 +456,57 @@
   }
   $('#top-shelf').addEventListener('click', (e) => { const b = e.target.closest('[data-id]'); if (b) openDetail(state.songs[b.dataset.id]); });
 
-  // ----- Recently played (Apple Music / Spotify) -----
+  // ----- Recently played: Apple Music, every connected service, and "Find my account" -----
   let recentSongs = [];
   let recentStatus = 'idle'; // idle | loading | ready | error
   let recentError = '';
+  let recentFrom = [];
+  let connections = [];      // server-side services: [{ service, name, configured, connected, account, waiting, missing }]
+  let foundSongs = readJSON('encore.foundSongs') || [];
   const amPossible = () => !!(CFG.musickitDeveloperToken || (sync.config && sync.config.appleMusic));
-  const spotifyClientId = () => (sync.config && sync.config.spotifyClientId) || CFG.spotifyClientId || '';
-  const anyHistory = () => amConnected() || Services.Spotify.connected();
+  const spotifyClientId = () => CFG.spotifyClientId || '';
+  const linked = () => connections.filter((c) => c.connected && !c.waiting);
+  const anyHistory = () => amConnected() || linked().length > 0 || (!sync.server && Services.Spotify.connected()) || foundSongs.length > 0;
+  async function loadConnections() {
+    if (!sync.server) return;
+    const r = await api('/api/connections').catch(() => null);
+    if (r && r.ok) connections = r.data.connections || [];
+  }
+  const svcName = (k) => (k === 'apple' ? 'Apple Music' : k === 'lastfm' ? 'Last.fm' : (connections.find((c) => c.service === k) || Services.LIST.find((s) => s.key === k) || { name: k }).name);
+  async function toSongs(tracks, n = 15) {
+    return (await mapLimit(tracks.slice(0, n), 4, (t) => resolveTrack(t.title, t.artist))).filter(Boolean);
+  }
   async function loadRecent() {
     if (!anyHistory()) { recentStatus = 'idle'; renderRecent(); return; }
     recentStatus = 'loading'; renderRecent();
-    try {
-      const out = [];
-      const errors = [];
-      if (amConnected()) { try { out.push(...(await amRecent())); } catch (_) { errors.push('Apple Music'); } }
-      if (Services.Spotify.connected()) {
-        try {
-          const tracks = (await Services.Spotify.recent()).slice(0, 20);
-          out.push(...(await mapLimit(tracks, 4, (t) => resolveTrack(t.title, t.artist))).filter(Boolean));
-        } catch (_) { errors.push('Spotify'); }
-      }
-      const seen = new Set();
-      recentSongs = out.filter((s) => !seen.has(s.id) && seen.add(s.id));
-      if (!recentSongs.length && errors.length) throw new Error(`${errors.join(' and ')} didn’t answer.`);
-      recentStatus = 'ready';
-      scheduleRecs();
-    } catch (err) {
-      recentStatus = 'error'; recentError = err.message || 'Couldn’t load your listening history.';
+    const out = [];
+    const errors = [];
+    recentFrom = [];
+    if (amConnected()) { try { out.push(...(await amRecent())); recentFrom.push('Apple Music'); } catch (_) { errors.push('Apple Music'); } }
+    await Promise.all(linked().map(async (c) => {
+      const r = await api(`/api/svc/${c.service}/recent`, { timeout: 20000 }).catch(() => ({ ok: false, data: {} }));
+      if (r.ok) { out.push(...(await toSongs(r.data.tracks || []))); recentFrom.push(c.name); }
+      else { errors.push(c.name); if (r.data.reauth) needsReconnect(c.service); }
+    }));
+    if (!sync.server && Services.Spotify.connected()) {
+      try { out.push(...(await toSongs(await Services.Spotify.recent()))); recentFrom.push('Spotify'); } catch (_) { errors.push('Spotify'); }
     }
+    if (foundSongs.length) { out.push(...foundSongs); recentFrom.push(state.lookup ? `${state.lookup.account} on ${svcName(state.lookup.service)}` : 'your profile'); }
+    const seen = new Set();
+    recentSongs = out.filter((s) => s && !seen.has(s.id) && seen.add(s.id));
+    if (!recentSongs.length && errors.length) { recentStatus = 'error'; recentError = `${errors.join(' and ')} didn’t answer.`; }
+    else { recentStatus = 'ready'; scheduleRecs(); }
     renderRecent();
   }
   function renderRecent() {
     const ul = $('#recent');
     const st = $('#recent-state');
-    const src = [amConnected() && 'Apple Music', Services.Spotify.connected() && 'Spotify'].filter(Boolean).join(' + ');
-    $('#recent-source').textContent = src;
+    $('#recent-source').textContent = recentFrom.join(' + ');
     if (recentStatus === 'loading') { stateBlock(st); skeleton(ul, 4); return; }
     if (!anyHistory()) {
       ul.innerHTML = '';
-      const actions = [{ label: 'Connect Apple Music', run: amConnect }];
-      if (spotifyClientId()) actions.push({ label: 'Connect Spotify', run: spotifyConnect });
-      stateBlock(st, { title: 'See what you’ve been playing', body: 'Connect Apple Music and your recently played songs show up here, one tap from a rating.' + (am.error ? `<br><span style="color:var(--danger)">${esc(am.error)}</span>` : ''), actions });
+      stateBlock(st, { title: 'See what you’ve been playing', body: 'Connect a music service and your recent songs show up here, one tap from a rating. No connection? Use “Find my account” with a public Last.fm or Spotify profile.' + (am.error ? `<br><span style="color:var(--danger)">${esc(am.error)}</span>` : ''),
+        actions: [{ label: 'Connect Apple Music', run: amConnect }, { label: 'Other services', run: () => openConnectSettings() }] });
       return;
     }
     if (recentStatus === 'error') {
@@ -519,18 +516,19 @@
     }
     ul.innerHTML = '';
     const mine = scoreMapOf(state.order);
-    recentSongs.slice(0, 15).forEach((s) => ul.appendChild(songRow(s, { mine: mine[s.id], rateLabel: 'Rate this', addList: true })));
-    stateBlock(st, recentSongs.length ? {} : { title: 'Nothing played lately', body: 'Play something on ' + src + ', then pull down to refresh.' });
+    recentSongs.slice(0, 20).forEach((s) => ul.appendChild(songRow(s, { mine: mine[s.id], rateLabel: 'Rate this', addList: true })));
+    stateBlock(st, recentSongs.length ? {} : { title: 'Nothing played lately', body: 'Play something, then pull down to refresh.' });
   }
 
   // =====================================================================
   // CHARTS
   // =====================================================================
-  let genre = 'pop';
+  let genre = 'all';
   let chartSongs = [];
   let chartSeq = 0;
+  const TABS_G = () => [G.ALL, ...G.GENRES];
   function renderGenreStrip() {
-    $('#genre-strip').innerHTML = G.GENRES.map((g) => `<button class="${g.key === genre ? 'active' : ''}" data-genre="${g.key}" role="tab" aria-selected="${g.key === genre}">${esc(g.label)}</button>`).join('');
+    $('#genre-strip').innerHTML = TABS_G().map((g) => `<button class="${g.key === genre ? 'active' : ''}" data-genre="${g.key}" role="tab" aria-selected="${g.key === genre}">${esc(g.label)}</button>`).join('');
   }
   $('#genre-strip').addEventListener('click', (e) => {
     const b = e.target.closest('[data-genre]');
@@ -540,28 +538,63 @@
     b.scrollIntoView({ inline: 'center', block: 'nearest', behavior: M.reduced() ? 'auto' : 'smooth' });
     loadCharts();
   });
-  const sourceBadge = (v) => (v.placeholder ? '<span class="badge warn">Placeholder data</span>' : `<span class="label">via ${esc(v.source)}</span>`);
+  const big = (n) => (n >= 1e9 ? (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(n));
+  function ago(t) {
+    if (!t) return '';
+    const m = Math.round((Date.now() - t) / 60000);
+    return m < 2 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+  }
+  /** Chart row → song. Rows without an Apple id get matched when you first play, rate or add them. */
+  function chartSong(r) {
+    const known = r.appleId && (state.songs[r.appleId] || lastResults.find((s) => s.id === r.appleId));
+    return known || { id: r.appleId || 'q:' + (r.artist + '|' + r.title).toLowerCase(), title: r.title, artist: r.artist, album: r.album || '', art: r.art || '', preview: r.preview || '', url: '', genre: '', year: '', explicit: false, pending: !r.appleId };
+  }
+  function chartMeta(r, kind) {
+    if (kind === 'streamed') return r.streams ? `${big(r.streams)} ${r.unit === 'Last.fm plays' ? 'Last.fm plays' : 'Spotify streams'}` : '';
+    const bits = [];
+    if (r.weeks) bits.push(r.weeks === 1 && r.tracked ? 'New this week' : `${r.weeks} wk${r.weeks > 1 ? 's' : ''} on chart`);
+    if (r.peak) bits.push(`peak #${r.peak}`);
+    return bits.join(' · ');
+  }
   async function loadCharts({ fresh = false } = {}) {
     const seq = ++chartSeq;
-    const parts = [['current', 20], ['streamed', 15]];
-    parts.forEach(([kind]) => { skeleton($(`#chart-${kind}`), 5); $(`#${kind}-source`).innerHTML = ''; $(`#${kind}-note`).innerHTML = ''; stateBlock($(`#chart-${kind}-state`)); });
-    await Promise.all(parts.map(async ([kind, n]) => {
-      try {
-        const v = await Charts[kind](genre, { fresh });
-        if (seq !== chartSeq) return;
-        $(`#${kind}-source`).innerHTML = sourceBadge(v);
-        $(`#${kind}-note`).innerHTML = v.note ? `<p class="note">${esc(v.note)}</p>` : '';
-        const ul = $(`#chart-${kind}`);
-        ul.innerHTML = '';
-        v.songs.slice(0, n).forEach((s, i) => { chartSongs.push(s); ul.appendChild(songRow(s, { rank: i + 1, addList: true })); });
-        if (chartSongs.length > 400) chartSongs = chartSongs.slice(-200);
-        stateBlock($(`#chart-${kind}-state`), v.songs.length ? {} : { title: 'Nothing here yet', body: 'This chart came back empty. Try another genre.' });
-      } catch (_) {
-        if (seq !== chartSeq) return;
-        $(`#chart-${kind}`).innerHTML = '';
-        stateBlock($(`#chart-${kind}-state`), { error: true, title: 'This chart didn’t load', body: 'Check your connection, then try again.', actions: [{ label: 'Try again', run: () => loadCharts({ fresh: true }) }] });
-      }
-    }));
+    const kinds = [['current', 50], ['streamed', 25]];
+    kinds.forEach(([k]) => { skeleton($(`#chart-${k}`), 5); $(`#${k}-source`).innerHTML = ''; $(`#${k}-note`).innerHTML = ''; stateBlock($(`#chart-${k}-state`)); });
+    $('#albums-section').hidden = true;
+    let v;
+    try { v = await Charts.load(genre, { fresh }); }
+    catch (_) {
+      if (seq !== chartSeq) return;
+      kinds.forEach(([k]) => { $(`#chart-${k}`).innerHTML = ''; stateBlock($(`#chart-${k}-state`), { error: true, title: 'Charts didn’t load', body: 'Check your connection, then try again.', actions: [{ label: 'Try again', run: () => loadCharts({ fresh: true }) }] }); });
+      return;
+    }
+    if (seq !== chartSeq) return;
+    for (const [k, n] of kinds) {
+      const c = v[k] || { rows: [] };
+      $(`#${k}-source`).innerHTML = c.source ? `<span class="label">${esc(c.source)}${c.updatedAt ? ' · updated ' + esc(ago(c.updatedAt)) : ''}</span>` : '';
+      $(`#${k}-note`).innerHTML = c.note ? `<p class="note">${esc(c.note)}</p>` : '';
+      const ul = $(`#chart-${k}`);
+      ul.innerHTML = '';
+      c.rows.slice(0, n).forEach((r) => { const s = chartSong(r); chartSongs.push(s); ul.appendChild(songRow(s, { rank: r.rank, addList: true, meta: chartMeta(r, k) })); });
+      stateBlock($(`#chart-${k}-state`), c.rows.length || c.note ? {} : { title: 'Nothing here yet', body: 'This chart came back empty.' });
+      if (c.building && !c.rows.length) setTimeout(() => { if (seq === chartSeq && activeView === 'charts') loadCharts({ fresh: true }); }, 20000);
+    }
+    if (v.albums && v.albums.rows && v.albums.rows.length) {
+      $('#albums-section').hidden = false;
+      $('#albums-source').innerHTML = `<span class="label">${esc(v.albums.source)} · updated ${esc(ago(v.albums.updatedAt))}</span>`;
+      const ul = $('#chart-albums');
+      ul.innerHTML = '';
+      v.albums.rows.slice(0, 50).forEach((r) => { const s = chartSong(r); ul.appendChild(songRow({ ...s, album: r.title }, { rank: r.rank, meta: chartMeta(r, 'current'), noActions: true })); });
+    }
+    if (chartSongs.length > 600) chartSongs = chartSongs.slice(-300);
+  }
+  /** Match a chart row to a playable Apple Music song before acting on it. */
+  async function ensureSong(song) {
+    if (!song || !song.pending) return song;
+    const hit = await resolveTrack(song.title, song.artist).catch(() => null);
+    if (!hit) { toast(`Couldn’t find “${song.title}” on Apple Music`); return null; }
+    chartSongs.push(hit);
+    return hit;
   }
 
   // =====================================================================
@@ -572,6 +605,7 @@
   function renderRatings() {
     const n = rated();
     $('#ratings-count').textContent = n ? `(${n})` : '';
+    $('#ratings-owner').innerHTML = n ? `${avatarHtml(sync.user, 'xs')}<span>${sync.user ? '@' + esc(sync.user.username) + '’s' : 'Your'} ratings · ${n} song${n === 1 ? '' : 's'}</span>` : '';
     $('#lists-count').textContent = state.lists.length ? `(${state.lists.length})` : '';
     $('#drag-hint').hidden = !canDrag();
     const ol = $('#ratings');
@@ -668,7 +702,7 @@
     const l = state.lists.find((x) => x.id === openListId);
     if (!l) return;
     $('#list-detail').innerHTML = `<div class="list-head">
-        <p class="label accent">${l.isPublic ? 'Public list' : 'Private list'} · ${l.songIds.length} song${l.songIds.length === 1 ? '' : 's'}</p>
+        <p class="label accent owned">${avatarHtml(sync.user, 'xs')}${l.isPublic ? 'Public list' : 'Private list'} · ${l.songIds.length} song${l.songIds.length === 1 ? '' : 's'}${sync.user ? ' · by @' + esc(sync.user.username) : ''}</p>
         <h1 class="display" id="list-name">${esc(l.name)}</h1>
         <div class="btn-row" style="margin:0"><button class="btn primary sm" data-la="add">${I.plus}Add songs</button><button class="btn sm" data-la="rename">${I.edit}Rename</button><button class="btn quiet sm danger" data-la="delete">${I.trash}Delete</button></div>
         <label class="toggle"><span>Public<br /><small class="muted">Anyone who can see your profile can see this list</small></span><span class="switch"><input type="checkbox" id="list-public" ${l.isPublic ? 'checked' : ''} /><i></i></span></label>
@@ -817,13 +851,13 @@
       // New users: fall back to the genre charts.
       if (rated() < 3 || items.length < 8) {
         const counts = {};
-        state.order.forEach((id) => { const k = genreKeyFor(state.songs[id]?.genre); if (k) counts[k] = (counts[k] || 0) + 1; });
+        state.order.forEach((id) => { const k = G.fromName(state.songs[id]?.genre); if (k) counts[k] = (counts[k] || 0) + 1; });
         const keys = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 2);
         if (!keys.length) keys.push('pop', 'hiphop');
         for (const k of keys) {
           try {
-            const v = await Charts.current(k);
-            v.songs.filter((s) => !state.order.includes(s.id)).slice(0, 6).forEach((s) => items.push({ song: s, predicted: null, kind: 'chart', reason: `#${v.songs.indexOf(s) + 1} on the ${G.byKey[k].label} chart${v.placeholder ? ' (sample list)' : ' right now'}` }));
+            const v = (await Charts.load(k)).current || { rows: [] };
+            v.rows.filter((r) => r.appleId && !state.order.includes(r.appleId)).slice(0, 6).forEach((r) => items.push({ song: chartSong(r), predicted: null, kind: 'chart', reason: `#${r.rank} on the ${G.byKey[k].label} chart right now` }));
           } catch (_) { /* skip */ }
         }
       }
@@ -862,7 +896,8 @@
   // PROFILE
   // =====================================================================
   function initials(name) { return esc((name || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()); }
-  const avatarHtml = (u, cls = '') => `<span class="avatar ${cls}">${u && u.avatar ? `<img src="${esc(u.avatar)}" alt="" class="in" />` : u ? initials(u.displayName) : I.user}</span>`;
+  /** A photo if there is one, otherwise a vinyl record. */
+  const avatarHtml = (u, cls = '') => (u && u.avatar ? `<span class="avatar ${cls}"><img src="${esc(u.avatar)}" alt="" class="in" /></span>` : `<span class="avatar vinyl-av ${cls}" aria-hidden="true"><i></i></span>`);
   function renderMeButton() {
     const b = $('#me-btn');
     b.hidden = !sync.server;
@@ -872,34 +907,132 @@
   }
   $('#me-btn').onclick = () => (sync.user ? showView('profile') : openAuth('signup'));
 
-  function top10Html(order, songs) {
+  function top10Html(order, songs, owner) {
     const top = R.flatten(order).slice(0, 10).filter((e) => songs[e.id]);
     if (!top.length) return '';
-    return `<div class="section"><div class="section-head"><h2>Top 10</h2></div><ol class="rows">${top.map((e) => {
+    return `<div class="section"><div class="section-head"><h2 class="owned">${owner !== undefined ? avatarHtml(owner, 'xs') : ''}Top 10</h2></div><ol class="rows">${top.map((e) => {
       const s = songs[e.id];
       return `<li class="row" data-id="${esc(s.id)}"><div class="row-body"><div class="rank ${e.rank <= 3 ? 'hot' : ''}">${e.rank}</div><button data-act="play" aria-label="Play ${esc(s.title)}">${pack(s)}</button><div class="meta" data-act="open"><div class="t1">${esc(s.title)}</div><div class="t2">${esc(s.artist)}</div></div><div class="actions">${sticker(e.score)}</div></div></li>`;
     }).join('')}</ol></div>`;
   }
-  function listsHtml(lists, songs, own) {
+  function listsHtml(lists, songs, own, owner) {
     if (!lists.length && !own) return '';
-    return `<div class="section"><div class="section-head"><h2>Lists</h2>${own ? `<button class="btn quiet sm" data-p="new-list">${I.plus}New</button>` : ''}</div>
+    return `<div class="section"><div class="section-head"><h2 class="owned">${owner !== undefined ? avatarHtml(owner, 'xs') : ''}Lists</h2>${own ? `<button class="btn quiet sm" data-p="new-list">${I.plus}New</button>` : ''}</div>
       ${lists.length ? `<div class="crates">${lists.map((l) => crateHtml(l, songs, own)).join('')}</div>` : '<p class="muted small">No lists yet. Make one for gym songs, road trips, or your best rap song.</p>'}</div>`;
   }
+  // ----- Connect settings: every service + "Find my account" -----
+  const SERVER_SVCS = ['spotify', 'youtube', 'soundcloud', 'amazon'];
+  const LOOKUP_SVCS = [['lastfm', 'Last.fm'], ['spotify', 'Spotify'], ['youtube', 'YouTube'], ['soundcloud', 'SoundCloud']];
+  function serviceRow(key, name, status, btn, on) {
+    return `<li data-svc-row="${key}"><span class="svc-mark ${on ? 'on' : ''}" aria-hidden="true">${esc(name[0])}</span><div><div class="t1">${esc(name)}</div><div class="t3" style="white-space:normal">${status}</div></div><div class="actions" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btn}</div></li>`;
+  }
   function servicesHtml() {
-    return `<div class="section"><div class="section-head"><h2>Connected services</h2></div><ul class="services">${Services.LIST.map((svc) => {
-      let status = '';
-      let btn = '';
-      if (svc.key === 'apple') {
-        if (amConnected()) { status = 'Connected · recently played shows on Home'; btn = `<button class="btn sm" data-svc="apple-playlist">Save Top 25</button><button class="btn quiet sm" data-svc="apple-off">Disconnect</button>`; }
-        else { status = am.error ? `<span style="color:var(--danger)">${esc(am.error)}</span>` : 'Recently played on Home, and full songs instead of previews'; btn = '<button class="btn primary sm" data-svc="apple-on">Connect</button>'; }
-      } else if (svc.key === 'spotify') {
-        if (Services.Spotify.connected()) { status = 'Connected' + (Services.Spotify.profile() ? ' as ' + esc(Services.Spotify.profile()) : ''); btn = '<button class="btn quiet sm" data-svc="spotify-off">Disconnect</button>'; }
-        else if (spotifyClientId()) { status = 'Recently played from Spotify on Home'; btn = '<button class="btn primary sm" data-svc="spotify-on">Connect</button>'; }
-        else { status = 'Needs a Spotify app client ID from the site owner'; btn = '<span class="badge">Not set up</span>'; }
-      } else { status = esc(svc.why); btn = '<span class="badge">Coming soon</span>'; }
-      const on = (svc.key === 'apple' && amConnected()) || (svc.key === 'spotify' && Services.Spotify.connected());
-      return `<li><span class="svc-mark ${on ? 'on' : ''}" aria-hidden="true">${esc(svc.name[0])}</span><div><div class="t1">${esc(svc.name)}</div><div class="t3" style="white-space:normal">${status}</div></div><div class="actions" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btn}</div></li>`;
-    }).join('')}</ul></div>`;
+    const rows = [];
+    // Apple Music: MusicKit sign-in in the browser.
+    if (amConnected()) rows.push(serviceRow('apple', 'Apple Music', 'Connected · recent plays on Home, ❤ saves to your library', `<button class="btn quiet sm" data-svc="apple-off">Disconnect</button>`, true));
+    else if (amPossible()) rows.push(serviceRow('apple', 'Apple Music', am.error ? `<span style="color:var(--danger)">${esc(am.error)}</span>` : 'Recent plays, ❤ to your library, add to playlists', '<button class="btn primary sm" data-svc="apple-on">Connect</button>', false));
+    else rows.push(serviceRow('apple', 'Apple Music', `Not set up on this server yet. Needs <code>APPLE_TEAM_ID</code>, <code>APPLE_KEY_ID</code>, <code>APPLE_PRIVATE_KEY_PATH</code>.`, '<button class="btn sm" data-svc="apple-on">Connect</button>', false));
+    // Spotify, YouTube Music, SoundCloud, Amazon Music: server-side OAuth.
+    for (const key of SERVER_SVCS) {
+      const c = connections.find((x) => x.service === key);
+      const name = (c && c.name) || (Services.LIST.find((x) => x.key === key) || {}).name;
+      if (!sync.server) {
+        if (key === 'spotify' && spotifyClientId()) {
+          rows.push(Services.Spotify.connected()
+            ? serviceRow(key, name, 'Connected in this browser', '<button class="btn quiet sm" data-svc="spotify-pkce-off">Disconnect</button>', true)
+            : serviceRow(key, name, 'Recent plays from Spotify', '<button class="btn primary sm" data-svc="spotify-pkce">Connect</button>', false));
+        } else rows.push(serviceRow(key, name, 'Needs the Encore server (its sign-in uses a secret key).', '<span class="badge">Server only</span>', false));
+        continue;
+      }
+      if (!c) continue;
+      if (c.connected && c.waiting) rows.push(serviceRow(key, name, `Signed in${c.account ? ' as ' + esc(c.account) : ''}. Waiting for Amazon Music API access (<code>AMAZON_MUSIC_API_KEY</code>).`, `<button class="btn quiet sm" data-svc="off" data-name="${key}">Disconnect</button>`, false));
+      else if (c.connected) rows.push(serviceRow(key, name, `Connected${c.account ? ' as ' + esc(c.account) : ''} · ${key === 'youtube' ? 'liked videos' : key === 'soundcloud' ? 'likes' : 'recent plays'} on Home, ❤ and playlists sync`, `<button class="btn quiet sm" data-svc="off" data-name="${key}">Disconnect</button>`, true));
+      else if (c.configured) rows.push(serviceRow(key, name, key === 'youtube' ? 'Liked videos and playlists (YouTube has no listening history API)' : key === 'soundcloud' ? 'Your likes and playlists' : key === 'amazon' ? 'Library and playlists (needs Amazon’s API approval)' : 'Recent plays, ❤ to Liked Songs, add to playlists', `<a class="btn primary sm" href="/auth/${key}/start">Connect</a>`, false));
+      else rows.push(serviceRow(key, name, `Not set up on this server yet. Needs ${c.missing.map((m) => `<code>${esc(m)}</code>`).join(', ')}.`, `<button class="btn sm" data-svc="explain" data-name="${key}">Connect</button>`, false));
+    }
+    const lookups = (sync.config && sync.config.lookups) || {};
+    const found = state.lookup ? `<p class="small muted" style="margin:var(--s-2) 0 0">Showing ${esc(state.lookup.account)} on ${esc(svcName(state.lookup.service))}. These also appear under Recently played on Home. <button class="btn quiet sm" data-p="clear-found">Clear</button></p>` : '';
+    return `<div class="section" id="connect-settings"><div class="section-head"><h2>Connect settings</h2></div><ul class="services">${rows.join('')}</ul>
+      <div class="find-account">
+        <h3>Find my account</h3>
+        <p class="small muted">Service not connected, or connection failing? Look up a public profile and rate what’s been playing.</p>
+        ${sync.server ? `<form class="lookup-row" id="lookup-form">
+          <select class="input" name="service" aria-label="Service">${LOOKUP_SVCS.map(([k, n]) => `<option value="${k}" ${lookups[k] === false ? 'disabled' : ''}>${n}${lookups[k] === false ? ' (not set up)' : ''}</option>`).join('')}</select>
+          <input class="input" name="input" placeholder="Username or profile link" autocapitalize="none" required aria-label="Username or profile link" />
+          <button class="btn primary" type="submit">Find</button>
+        </form>
+        <p class="form-error" id="lookup-error" hidden></p>${found}
+        <ul class="rows" id="found-list"></ul>` : '<p class="small muted">Profile lookups need the Encore server.</p>'}
+      </div></div>`;
+  }
+  function renderFound() {
+    const ul = $('#found-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const mine = scoreMapOf(state.order);
+    foundSongs.slice(0, 20).forEach((s) => ul.appendChild(songRow(s, { mine: mine[s.id], rateLabel: 'Rate this', addList: true })));
+  }
+  async function lookupAccount(service, input) {
+    const err = $('#lookup-error');
+    const btn = $('#lookup-form button');
+    err.hidden = true;
+    btn.disabled = true; btn.textContent = 'Finding…';
+    skeleton($('#found-list'), 3);
+    const r = await api('/api/lookup', { method: 'POST', body: { service, input }, timeout: 30000 }).catch(() => ({ ok: false, data: { error: 'Can’t reach the server.' } }));
+    btn.disabled = false; btn.textContent = 'Find';
+    if (!r.ok) { $('#found-list').innerHTML = ''; err.textContent = r.data.error || 'Couldn’t find that profile.'; err.hidden = false; return; }
+    const songs = await toSongs(r.data.tracks || [], 20);
+    if (!songs.length) { $('#found-list').innerHTML = ''; err.textContent = `Found ${r.data.account}, but no public songs to show.`; err.hidden = false; return; }
+    foundSongs = songs;
+    writeJSON('encore.foundSongs', songs);
+    state.lookup = { service, input, account: r.data.account, at: Date.now() };
+    save();
+    renderProfile();
+    toast(`Found ${r.data.account}: ${songs.length} songs to rate`);
+    loadRecent();
+  }
+  $('#profile').addEventListener('submit', (e) => {
+    if (e.target.id !== 'lookup-form') return;
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    lookupAccount(f.service, f.input.trim());
+  });
+  bindList($('#profile'), (id) => foundSongs.find((s) => s.id === id) || state.songs[id]);
+  async function serviceAction(act, key) {
+    if (act === 'apple-on') return amConnect();
+    if (act === 'apple-off') return amDisconnect();
+    if (act === 'spotify-pkce') return spotifyConnect();
+    if (act === 'spotify-pkce-off') { Services.Spotify.disconnect(); renderAll(); loadRecent(); return toast('Spotify disconnected'); }
+    if (act === 'explain') {
+      const c = connections.find((x) => x.service === key);
+      return openSheet(`<p class="label kicker">${esc(c.name)}</p><h3 class="prompt">Not set up yet</h3><p class="center muted">This server needs ${c.missing.map((m) => `<code>${esc(m)}</code>`).join(', ')} in its <code>.env</code> before ${esc(c.name)} can connect. SETUP.md has the steps.</p><p class="center small muted">Until then, use <b>Find my account</b> below.</p>`);
+    }
+    if (act === 'off') {
+      await api(`/api/connections/${key}/disconnect`, { method: 'POST', body: {} }).catch(() => {});
+      await loadConnections();
+      renderAll(); loadRecent();
+      toast(`${svcName(key)} disconnected`);
+    }
+  }
+  function openConnectSettings() {
+    showView('profile');
+    setTimeout(() => { const el = $('#connect-settings'); if (el) el.scrollIntoView({ behavior: M.reduced() ? 'auto' : 'smooth', block: 'start' }); }, 60);
+  }
+  /** Username field: live availability check (sign-up and edit profile). */
+  function watchUsername(input, hint, current) {
+    let t;
+    input.addEventListener('input', () => {
+      clearTimeout(t);
+      const v = input.value.trim();
+      t = setTimeout(async () => {
+        if (!v) { hint.className = 'hint'; hint.textContent = '3–24 letters, numbers, _ or .'; return; }
+        if (current && v.toLowerCase() === current.toLowerCase()) { hint.className = 'hint'; hint.textContent = 'That’s your current username.'; return; }
+        const r = await api('/api/username-available?u=' + encodeURIComponent(v)).catch(() => null);
+        if (!r || !r.ok) return;
+        hint.className = 'hint ' + (r.data.available ? 'ok' : 'bad');
+        hint.textContent = !r.data.valid ? 'Use 3–24 letters, numbers, _ or .' : r.data.available ? `@${v} is available` : `@${v} is taken`;
+      }, 250);
+    });
   }
   function renderProfile() {
     const el = $('#profile');
@@ -918,27 +1051,20 @@
         </div>`;
     } else {
       head = `<div class="profile-card">${avatarHtml(null, 'xl')}<h1 class="display">Your crate</h1>
-          <p class="muted" style="max-width:40ch">${sync.server ? 'You’re rating as a guest, so everything lives in this browser. Make an account to keep it everywhere and share your profile.' : 'Everything you rate is saved in this browser. Use Export below to back it up or move it to another device.'}</p>
+          <p class="muted" style="max-width:40ch">${sync.server ? 'You’re rating as a guest, so everything lives in this browser. Make an account to keep it everywhere and share your profile.' : 'Everything you rate is saved in this browser. Clearing your browser data clears it too.'}</p>
           ${counts}
           <div class="btn-row center">${sync.server ? '<button class="btn primary" data-p="signup">Create account</button><button class="btn" data-p="login">Sign in</button>' : ''}${n ? `<button class="btn sm" data-p="share">${I.share}Share Top 10</button>` : ''}</div></div>`;
     }
     const settings = `<div class="section"><div class="section-head"><h2>Settings</h2></div>
         ${u ? `<label class="toggle"><span>Public profile<br /><small class="muted">People can find you and see your ratings and public lists</small></span><span class="switch"><input type="checkbox" id="public-toggle" ${u.isPublic ? 'checked' : ''} /><i></i></span></label>` : ''}
-        <div class="btn-row">${u && u.isPublic ? `<button class="btn sm" data-p="copy">${I.share}Copy profile link</button>` : ''}<button class="btn sm" data-p="export">${I.download}Export</button><button class="btn sm" data-p="import">Import</button>${u ? '<button class="btn quiet sm" data-p="logout">Sign out</button>' : ''}</div></div>`;
+        <div class="btn-row">${u && u.isPublic ? `<button class="btn sm" data-p="copy">${I.share}Copy profile link</button>` : ''}<button class="btn sm" data-p="import">Import</button>${u ? '<button class="btn quiet sm" data-p="logout">Sign out</button>' : ''}</div></div>`;
     const people = sync.server ? `<div class="section"><div class="section-head"><h2>Find people</h2></div><div class="field" style="height:44px">${I.search}<input id="people-search" type="search" placeholder="Search by name or username" autocomplete="off" aria-label="Search people" /></div><ul id="people-results" class="people"></ul></div>` : '';
-    el.innerHTML = head + top10Html(state.order, state.songs) + listsHtml(state.lists, state.songs, true) + servicesHtml() + people + settings;
+    el.innerHTML = head + top10Html(state.order, state.songs, sync.user) + listsHtml(state.lists, state.songs, true, sync.user) + servicesHtml() + people + settings;
+    renderFound();
   }
   $('#profile').addEventListener('click', async (e) => {
     const svc = e.target.closest('[data-svc]');
-    if (svc) {
-      const k = svc.dataset.svc;
-      if (k === 'apple-on') amConnect();
-      if (k === 'apple-off') amDisconnect();
-      if (k === 'apple-playlist') amExportPlaylist();
-      if (k === 'spotify-on') spotifyConnect();
-      if (k === 'spotify-off') { Services.Spotify.disconnect(); delete state.connections.spotify; save(); renderAll(); loadRecent(); toast('Spotify disconnected'); }
-      return;
-    }
+    if (svc) { serviceAction(svc.dataset.svc, svc.dataset.name); return; }
     const person = e.target.closest('[data-user]');
     if (person) return openUser(person.dataset.user);
     const crate = e.target.closest('[data-list]');
@@ -949,9 +1075,9 @@
     if (a === 'signup' || a === 'login') openAuth(a);
     if (a === 'edit') openEditProfile();
     if (a === 'avatar') $('#avatar-file').click();
+    if (a === 'clear-found') { foundSongs = []; state.lookup = null; writeJSON('encore.foundSongs', []); save(); renderProfile(); loadRecent(); }
     if (a === 'share') openShare();
     if (a === 'new-list') openNewList();
-    if (a === 'export') exportData();
     if (a === 'import') $('#import-file').click();
     if (a === 'logout') { await api('/api/logout', { method: 'POST', body: {} }).catch(() => {}); signedOut(); toast('Signed out'); }
     if (a === 'copy') {
@@ -968,36 +1094,69 @@
     else { e.target.checked = !want; toast('Couldn’t change that. Try again'); }
   });
   $('#profile').addEventListener('input', (e) => { if (e.target.id === 'people-search') searchPeople(e.target.value); });
-  bindList($('#profile'), (id) => state.songs[id]);
-  /** Resize a picked photo to a 192px square JPEG before upload. */
+  /** Profile photo: pick → crop (drag to move, slider to zoom) → 256px JPEG. */
   $('#avatar-file').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
     if (!f || !sync.user) return;
-    try {
-      const bmp = await createImageBitmap(f);
-      const c = document.createElement('canvas');
-      c.width = c.height = 192;
-      const side = Math.min(bmp.width, bmp.height);
-      c.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 192, 192);
-      const r = await api('/api/me', { method: 'PATCH', body: { avatar: c.toDataURL('image/jpeg', 0.82) } });
-      if (!r.ok) throw new Error(r.data.error);
-      sync.user = r.data.user; writeJSON(LAST_USER, sync.user); renderAll(); toast('Photo updated');
-    } catch (err) { toast((err && err.message) || 'That image couldn’t be used'); }
+    let bmp;
+    try { bmp = await createImageBitmap(f); } catch (_) { toast('That file isn’t an image we can read'); return; }
+    openCropper(bmp);
   });
+  function openCropper(bmp) {
+    const SIZE = 280;
+    openSheet(`<p class="label kicker">Profile photo</p><h3 class="prompt">Crop your photo</h3>
+      <div class="cropper"><canvas id="crop-canvas" width="${SIZE * 2}" height="${SIZE * 2}" style="width:${SIZE}px;height:${SIZE}px" aria-label="Drag to position your photo"></canvas><i class="crop-ring" aria-hidden="true"></i></div>
+      <label class="crop-zoom"><span class="label">Zoom</span><input type="range" id="crop-zoom" min="1" max="4" step="0.01" value="1" /></label>
+      <div class="btn-row center"><button class="btn" data-dismiss>Cancel</button><button class="btn primary" id="crop-save">Save photo</button></div>`);
+    const cv = $('#crop-canvas');
+    const ctx = cv.getContext('2d');
+    const base = Math.max(SIZE / bmp.width, SIZE / bmp.height); // cover the circle at zoom 1
+    let zoom = 1, x = 0, y = 0;
+    const clamp = () => {
+      const w = bmp.width * base * zoom, h = bmp.height * base * zoom;
+      x = Math.min(0, Math.max(SIZE - w, x)); y = Math.min(0, Math.max(SIZE - h, y));
+    };
+    const center = () => { x = (SIZE - bmp.width * base * zoom) / 2; y = (SIZE - bmp.height * base * zoom) / 2; };
+    const draw = () => { ctx.setTransform(2, 0, 0, 2, 0, 0); ctx.fillStyle = '#16100c'; ctx.fillRect(0, 0, SIZE, SIZE); ctx.drawImage(bmp, x, y, bmp.width * base * zoom, bmp.height * base * zoom); };
+    center(); draw();
+    let drag = null;
+    cv.addEventListener('pointerdown', (ev) => { drag = { x0: ev.clientX - x, y0: ev.clientY - y }; cv.setPointerCapture(ev.pointerId); });
+    cv.addEventListener('pointermove', (ev) => { if (!drag) return; x = ev.clientX - drag.x0; y = ev.clientY - drag.y0; clamp(); draw(); });
+    cv.addEventListener('pointerup', () => { drag = null; });
+    $('#crop-zoom').addEventListener('input', (ev) => {
+      const old = zoom; zoom = Number(ev.target.value);
+      const cx = SIZE / 2, cy = SIZE / 2; // zoom around the middle
+      x = cx - (cx - x) * (zoom / old); y = cy - (cy - y) * (zoom / old);
+      clamp(); draw();
+    });
+    $('#crop-save').onclick = async () => {
+      const out = document.createElement('canvas');
+      out.width = out.height = 256;
+      const k = 256 / SIZE;
+      out.getContext('2d').drawImage(bmp, x * k, y * k, bmp.width * base * zoom * k, bmp.height * base * zoom * k);
+      const btn = $('#crop-save'); btn.disabled = true; btn.textContent = 'Saving…';
+      const r = await api('/api/me', { method: 'PATCH', body: { avatar: out.toDataURL('image/jpeg', 0.85) } }).catch(() => ({ ok: false, data: {} }));
+      if (!r.ok) { btn.disabled = false; btn.textContent = 'Save photo'; toast(r.data.error || 'Couldn’t save your photo. Try again'); return; }
+      sync.user = r.data.user; writeJSON(LAST_USER, sync.user); closeSheet(); renderAll(); toast('Photo updated');
+    };
+  }
   function openEditProfile() {
     const u = sync.user;
     openSheet(`<p class="label kicker">Profile</p><h3 class="prompt">Edit profile</h3>
       <form class="form" id="edit-form">
+        <label><span class="label">Username</span><input class="input" name="username" maxlength="24" autocapitalize="none" value="${esc(u.username)}" /><span class="hint" id="edit-u-hint">Your profile link uses it. 3–24 letters, numbers, _ or .</span></label>
         <label><span class="label">Name</span><input class="input" name="displayName" maxlength="40" value="${esc(u.displayName)}" /></label>
         <label><span class="label">Bio</span><textarea class="input" name="bio" maxlength="280" placeholder="What do you listen to?">${esc(u.bio || '')}</textarea></label>
         <label><span class="label">Email</span><input class="input" name="email" type="email" value="${esc(u.email || '')}" autocomplete="email" /></label>
         <p class="form-error" id="edit-error" hidden></p>
         <button class="btn primary wide" type="submit">Save</button>
       </form>`);
+    watchUsername($('#edit-form [name=username]'), $('#edit-u-hint'), u.username);
     $('#edit-form').onsubmit = async (e) => {
       e.preventDefault();
       const r = await api('/api/me', { method: 'PATCH', body: Object.fromEntries(new FormData(e.target)) }).catch(() => ({ ok: false, data: { error: 'Can’t reach the server.' } }));
+      if (r.ok && r.data.user.username !== u.username) { const old = readJSON(accountKey(u)); if (old) writeJSON(accountKey(r.data.user), old); }
       if (!r.ok) { const er = $('#edit-error'); er.textContent = r.data.error || 'Couldn’t save.'; er.hidden = false; return; }
       sync.user = r.data.user; writeJSON(LAST_USER, sync.user); closeSheet(); renderAll(); toast('Profile saved');
     };
@@ -1034,7 +1193,7 @@
         ${v.user.bio ? `<p class="bio">${esc(v.user.bio)}</p>` : ''}
         <div class="counts"><div><b>${v.order.length}</b><span class="label">Ratings</span></div><div><b>${v.lists.length}</b><span class="label">Lists</span></div><div><b>${common.length}</b><span class="label">In common</span></div></div>
         ${match}${svcNames.length ? `<p class="t3">Listens on ${svcNames.join(', ')}</p>` : ''}</div>
-      ${top10Html(v.order, v.songs)}${listsHtml(v.lists, v.songs, false)}`;
+      ${top10Html(v.order, v.songs, v.user)}${listsHtml(v.lists, v.songs, false, v.user)}`;
   }
   $('#user-profile').addEventListener('click', (e) => {
     const crate = e.target.closest('[data-list]');
@@ -1064,21 +1223,7 @@
       <p class="center small muted">${signup ? 'Already have an account?' : 'New to Encore?'} <a href="#" data-switch="${signup ? 'login' : 'signup'}">${signup ? 'Sign in' : 'Create one'}</a></p>`);
     setTimeout(() => $('#sheet-body input')?.focus(), 320);
     $('[data-switch]').onclick = (e) => { e.preventDefault(); openAuth(e.target.dataset.switch); };
-    if (signup) {
-      let t;
-      $('#auth-form [name=username]').addEventListener('input', (e) => {
-        clearTimeout(t);
-        const hint = $('#u-hint');
-        const v = e.target.value.trim();
-        t = setTimeout(async () => {
-          if (!v) { hint.className = 'hint'; hint.textContent = '3–24 letters, numbers, _ or .'; return; }
-          const r = await api('/api/username-available?u=' + encodeURIComponent(v)).catch(() => null);
-          if (!r || !r.ok) return;
-          hint.className = 'hint ' + (r.data.available ? 'ok' : 'bad');
-          hint.textContent = !r.data.valid ? 'Use 3–24 letters, numbers, _ or .' : r.data.available ? `@${v} is available` : `@${v} is taken`;
-        }, 250);
-      });
-    }
+    if (signup) watchUsername($('#auth-form [name=username]'), $('#u-hint'));
     $('#auth-form').onsubmit = async (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target));
@@ -1164,7 +1309,9 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     if (!res.ok) throw new Error('Apple Music error ' + res.status);
-    return res.status === 204 ? {} : res.json();
+    // Library adds return 202 with an empty body, and ratings can return 204.
+    const text = await res.text();
+    return text ? JSON.parse(text) : {};
   }
   function amToSong(r) {
     const a = r.attributes || {};
@@ -1179,14 +1326,137 @@
     const seen = new Set();
     return (d.data || []).filter((r) => r.type === 'songs' && !seen.has(r.id) && seen.add(r.id)).map(amToSong);
   }
-  async function amExportPlaylist(n = 25) {
-    const ids = state.order.slice(0, n).filter((id) => /^\d+$/.test(id));
-    if (!ids.length) { toast('Rate some songs first'); return; }
-    try {
-      await amFetch('/v1/me/library/playlists', { method: 'POST', body: { attributes: { name: `Encore Top ${ids.length}`, description: 'My highest-rated songs on Encore' }, relationships: { tracks: { data: ids.map((id) => ({ id, type: 'songs' })) } } } });
-      toast(`“Encore Top ${ids.length}” is in your Apple Music library`);
-    } catch (_) { toast('Couldn’t create the playlist. Try again'); }
+  // ----- Apple Music library (MusicKit, in the browser) -----
+  const isCatalogId = (id) => /^\d+$/.test(String(id));
+  async function amCall(path, opts) {
+    try { return await amFetch(path, opts); }
+    catch (e) {
+      if (/ 40[13]$/.test(e.message)) { needsReconnect('apple'); throw Object.assign(new Error('Apple Music needs you to reconnect.'), { reauth: true }); }
+      throw e;
+    }
   }
+  const appleLib = {
+    async favorite(song) {
+      if (!isCatalogId(song.id)) throw new Error('Not an Apple Music song');
+      await amCall(`/v1/me/library?ids[songs]=${song.id}`, { method: 'POST' });
+      await amCall(`/v1/me/ratings/songs/${song.id}`, { method: 'PUT', body: { type: 'rating', attributes: { value: 1 } } }).catch(() => {}); // "Love" is a bonus
+      return true;
+    },
+    async playlists() {
+      const d = await amCall('/v1/me/library/playlists?limit=100');
+      return (d.data || []).filter((p) => !p.attributes || p.attributes.canEdit !== false).map((p) => ({ id: p.id, name: (p.attributes && p.attributes.name) || 'Playlist', count: null }));
+    },
+    async createPlaylist(name, song) {
+      const d = await amCall('/v1/me/library/playlists', { method: 'POST', body: { attributes: { name, description: 'Made with Encore' }, relationships: { tracks: { data: isCatalogId(song.id) ? [{ id: song.id, type: 'songs' }] : [] } } } });
+      return { id: d.data && d.data[0] && d.data[0].id, name, added: true };
+    },
+    async add(id, song) {
+      if (!isCatalogId(song.id)) throw new Error('Not an Apple Music song');
+      await amCall(`/v1/me/library/playlists/${encodeURIComponent(id)}/tracks`, { method: 'POST', body: { data: [{ id: song.id, type: 'songs' }] } });
+      return true;
+    },
+  };
+  /** Server-connected services (Spotify, YouTube, SoundCloud, Amazon): same verbs over /api/svc. */
+  const serverLib = (svc) => ({
+    async call(path, opts) {
+      const r = await api(`/api/svc/${svc}${path}`, { ...opts, timeout: 30000 }).catch(() => ({ ok: false, status: 0, data: { error: 'Can’t reach the server.' } }));
+      if (r.status === 401 && r.data.reauth) { needsReconnect(svc); throw Object.assign(new Error(r.data.error), { reauth: true }); }
+      if (!r.ok) throw new Error(r.data.error || `${svcName(svc)} didn’t answer`);
+      return r.data;
+    },
+    favorite(song) { return this.call('/favorite', { method: 'POST', body: { title: song.title, artist: song.artist, album: song.album } }); },
+    async playlists() { return (await this.call('/playlists')).playlists; },
+    async createPlaylist(name, song) { const p = (await this.call('/playlists', { method: 'POST', body: { name } })).playlist; await this.add(p.id, song); return { ...p, added: true }; },
+    add(id, song) { return this.call(`/playlists/${encodeURIComponent(id)}/tracks`, { method: 'POST', body: { title: song.title, artist: song.artist, album: song.album } }); },
+  });
+  /** Services that can save favorites and playlists right now. */
+  function libraryTargets() {
+    const t = [];
+    if (amConnected()) t.push({ key: 'apple', name: 'Apple Music', lib: appleLib });
+    for (const c of linked()) t.push({ key: c.service, name: c.name, lib: serverLib(c.service) });
+    return t;
+  }
+  /** "Reconnect" when a service's access was revoked or expired beyond refresh. */
+  function needsReconnect(svc) {
+    const c = connections.find((x) => x.service === svc);
+    if (c) c.connected = false;
+    renderProfile();
+    toast(`${svcName(svc)} needs you to reconnect`, { action: 'Reconnect', run: () => (svc === 'apple' ? amConnect() : location.assign(`/auth/${svc}/start`)) });
+  }
+
+  // ----- ❤ Favorites: saved in Encore, and to every connected library -----
+  const favButton = (song, attr) => { const on = state.favorites.includes(song.id); return `<button class="btn ${on ? 'fav-on' : ''}" ${attr} aria-pressed="${on}">${on ? I.heartOn : I.heart}${on ? 'Favorited' : 'Favorite'}</button>`; };
+  async function toggleFavorite(song) {
+    remember(song);
+    const i = state.favorites.indexOf(song.id);
+    if (i >= 0) {
+      state.favorites.splice(i, 1);
+      save(); refreshPlaying();
+      toast('Removed from favorites (your service libraries keep the song)');
+      return;
+    }
+    state.favorites.unshift(song.id);
+    save(); refreshPlaying();
+    M.haptic([8, 30, 8]);
+    const targets = libraryTargets();
+    if (!targets.length) { toast('Favorited. Connect Apple Music or Spotify to save favorites to your library too', { action: 'Connect', run: openConnectSettings }); return; }
+    const results = await Promise.allSettled(targets.map((t) => t.lib.favorite(song)));
+    const ok = targets.filter((_, k) => results[k].status === 'fulfilled').map((t) => t.name);
+    const bad = targets.map((t, k) => (results[k].status === 'rejected' && !results[k].reason.reauth ? `${t.name}: ${results[k].reason.message}` : null)).filter(Boolean);
+    if (ok.length && !bad.length) toast(`Saved to ${ok.join(' and ')}`);
+    else if (ok.length) toast(`Saved to ${ok.join(' and ')}. ${bad.join('. ')}`);
+    else if (bad.length) toast(`Favorited in Encore. ${bad.join('. ')}`);
+  }
+
+  // ----- Add to playlist (on a connected service) -----
+  function openPlaylistPicker(song) {
+    const targets = libraryTargets();
+    if (!targets.length) {
+      openSheet(`<p class="label kicker">Add to playlist</p><h3 class="prompt">Connect a service first</h3><p class="center muted">Playlists live on Apple Music, Spotify, YouTube Music, SoundCloud or Amazon Music. Connect one to add “${esc(song.title)}” to a playlist there.</p><div class="btn-row center"><button class="btn primary" id="pl-connect">Connect settings</button></div>`);
+      $('#pl-connect').onclick = () => { closeSheet(); openConnectSettings(); };
+      return;
+    }
+    let cur = targets[0];
+    openSheet(`<p class="label kicker">Add to playlist</p><h3 class="prompt">${esc(song.title)}</h3>
+      ${targets.length > 1 ? `<div class="strip" id="pl-strip">${targets.map((t, i) => `<button class="${i === 0 ? 'active' : ''}" data-t="${t.key}">${esc(t.name)}</button>`).join('')}</div>` : `<p class="center label">${esc(cur.name)}</p>`}
+      <form class="lookup-row" id="pl-new" style="margin-top:var(--s-3)"><input class="input" name="name" placeholder="New playlist name" maxlength="100" required aria-label="New playlist name" /><button class="btn" type="submit">${I.plus}Create</button></form>
+      <p class="form-error" id="pl-error" hidden></p>
+      <ul class="pick-lists" id="pl-list"></ul>`);
+    const err = (m) => { const e = $('#pl-error'); if (!e) return; e.textContent = m || ''; e.hidden = !m; };
+    async function load() {
+      err('');
+      const ul = $('#pl-list');
+      ul.innerHTML = '<li class="muted small">Loading playlists…</li>';
+      try {
+        const pls = await cur.lib.playlists();
+        if (!$('#pl-list')) return;
+        ul.innerHTML = pls.length ? pls.map((p) => `<li data-pl="${esc(p.id)}" tabindex="0" role="button"><span>${esc(p.name)}</span>${p.count != null ? `<small class="muted">${p.count}</small>` : ''}<i class="check">${I.check}</i></li>`).join('') : '<li class="muted small">No playlists you can edit yet. Create one above.</li>';
+      } catch (e) { ul.innerHTML = ''; err(e.reauth ? `${cur.name} needs you to reconnect.` : e.message || `Couldn’t load your ${cur.name} playlists.`); }
+    }
+    $('#pl-list').addEventListener('click', async (e) => {
+      const li = e.target.closest('[data-pl]');
+      if (!li || li.classList.contains('busy')) return;
+      li.classList.add('busy');
+      err('');
+      try { await cur.lib.add(li.dataset.pl, song); li.classList.add('on'); M.haptic(8); toast(`Added to “${li.querySelector('span').textContent}” on ${cur.name}`); }
+      catch (x) { err(x.message || 'Couldn’t add it. Try again.'); }
+      li.classList.remove('busy');
+    });
+    $('#pl-new').onsubmit = async (e) => {
+      e.preventDefault();
+      const name = String(new FormData(e.target).get('name')).trim();
+      if (!name) return;
+      const b = e.target.querySelector('button');
+      b.disabled = true;
+      try { await cur.lib.createPlaylist(name, song); toast(`Created “${name}” on ${cur.name} with this song`); e.target.reset(); load(); }
+      catch (x) { err(x.message || 'Couldn’t create the playlist.'); }
+      b.disabled = false;
+    };
+    if ($('#pl-strip')) $$('#pl-strip button').forEach((b) => (b.onclick = () => { cur = targets.find((t) => t.key === b.dataset.t); $$('#pl-strip button').forEach((x) => x.classList.toggle('active', x === b)); load(); }));
+    load();
+  }
+
+
   function spotifyConnect() {
     const id = spotifyClientId();
     if (!id) { toast('Spotify isn’t set up on this site yet'); return; }
@@ -1243,6 +1513,10 @@
     $('#deck-toggle').setAttribute('aria-label', playing ? 'Pause' : 'Play');
     $('#deck-vinyl').classList.toggle('spin', playing);
     $('#deck-next').disabled = !(pb.index < pb.queue.length - 1);
+    const fav = id && state.favorites.includes(id);
+    $('#deck-fav').innerHTML = fav ? I.heartOn : I.heart;
+    $('#deck-fav').classList.toggle('on', !!fav);
+    $('#deck-fav').setAttribute('aria-pressed', !!fav);
   }
   function renderDeck(dir) {
     const deck = $('#deck');
@@ -1272,6 +1546,7 @@
     requestAnimationFrame(frame);
   })();
   $('#deck-toggle').onclick = togglePlay;
+  $('#deck-fav').onclick = () => pb.song && toggleFavorite(pb.song);
   $('#deck-next').onclick = () => { next(); M.haptic(6); };
   $('#deck-platter').onclick = () => pb.song && openDetail(pb.song);
   $('#deck-meta').onclick = () => pb.song && openDetail(pb.song);
@@ -1311,6 +1586,10 @@
       sheetWrap.hidden = false;
       document.body.classList.add('no-scroll');
       requestAnimationFrame(() => requestAnimationFrame(() => sheetWrap.classList.add('in')));
+    } else if (!sheetWrap.classList.contains('in')) {
+      // Reopened while the previous sheet was still closing: cancel that close.
+      document.body.classList.add('no-scroll');
+      sheetWrap.classList.add('in');
     }
     sheet.scrollTop = 0;
   }
@@ -1394,7 +1673,7 @@
         ${songTitle(song)}
         <div class="result"><div class="big-score" id="big-score">0.0</div><div class="place"><b>#${e.rank}</b> of ${n} · ${esc(note)}</div></div>
         <div class="avg-box">${avgLine(groupOf(state.order, state.songs, 'artist', song), 'artist')}${song.album ? avgLine(groupOf(state.order, state.songs, 'album', song), 'album') : ''}</div>
-        <div class="btn-row center"><button class="btn" data-done="list">${I.listAdd}Add to list</button><button class="btn primary" data-done="close">Done</button></div>
+        <div class="btn-row center">${favButton(song, 'data-done="fav"')}<button class="btn" data-done="list">${I.listAdd}Add to list</button><button class="btn" data-done="playlist">${I.note}Add to playlist</button><button class="btn primary" data-done="close">Done</button></div>
       </div>`);
     slideRecordOut();
     M.countUp($('#big-score'), e.score, { duration: 1100 });
@@ -1408,7 +1687,14 @@
     const ans = e.target.closest('[data-ans]');
     if (ans) return answer(ans.dataset.ans);
     const done = e.target.closest('[data-done]');
-    if (done) { const s = session && session.song; closeSheet(); if (done.dataset.done === 'list' && s) setTimeout(() => openAddToList(s), 340); return; }
+    if (done) {
+      const s = session && session.song;
+      if (done.dataset.done === 'fav' && s) { toggleFavorite(s).then(() => { done.outerHTML = favButton(s, 'data-done="fav"'); }); return; }
+      if (done.dataset.done === 'playlist' && s) return openPlaylistPicker(s);
+      closeSheet();
+      if (done.dataset.done === 'list' && s) setTimeout(() => openAddToList(s), 340);
+      return;
+    }
     const det = e.target.closest('[data-detail]');
     if (det) return detailAction(det.dataset.detail);
   });
@@ -1433,7 +1719,9 @@
         ${lists.length ? `<p class="center t3" style="white-space:normal;margin-top:var(--s-3)">On ${lists.map((l) => esc(l.name)).join(', ')}</p>` : ''}
         <div class="btn-row center">
           <button class="btn primary" data-detail="rate">${mine ? 'Re-rate' : 'Rate'}</button>
+          ${favButton(song, 'data-detail="fav"')}
           <button class="btn" data-detail="list">${I.listAdd}Add to list</button>
+          <button class="btn" data-detail="playlist">${I.note}Add to playlist</button>
           ${song.url ? `<a class="btn" href="${esc(song.url)}" target="_blank" rel="noopener">${I.external}Apple Music</a>` : ''}
           ${mine ? `<button class="btn quiet danger" data-detail="remove">${I.trash}Remove rating</button>` : ''}
         </div>
@@ -1444,6 +1732,8 @@
     if (!song) return;
     if (act === 'rate') startRating(song);
     else if (act === 'list') openAddToList(song);
+    else if (act === 'fav') toggleFavorite(song).then(() => openDetail(song));
+    else if (act === 'playlist') openPlaylistPicker(song);
     else if (act === 'remove') {
       const before = state.order.slice();
       state.order = R.remove(state.order, song.id);
@@ -1627,14 +1917,12 @@
       { label: 'Go to Recommendations', icon: 'disc', keywords: ['for you', 'suggestions'], run: () => showView('recs') },
       { label: 'Go to Profile', icon: 'user', run: () => showView('profile') },
       { label: 'New list', icon: 'plus', run: () => openNewList() },
-      ...G.GENRES.map((g) => ({ label: `${g.label} chart`, icon: 'chart', keywords: ['chart', g.key], run: () => { genre = g.key; renderGenreStrip(); chartsLoaded = true; showView('charts'); loadCharts(); } })),
+      ...[G.ALL, ...G.GENRES].map((g) => ({ label: `${g.label} chart`, icon: 'chart', keywords: ['chart', g.key], run: () => { genre = g.key; renderGenreStrip(); chartsLoaded = true; showView('charts'); loadCharts(); } })),
       { label: 'Share my Top 10', icon: 'share', run: () => openShare() },
-      { label: 'Export my data', icon: 'download', run: exportData },
       ...(amConnected() ? [] : [{ label: 'Connect Apple Music', icon: 'note', run: amConnect }]),
       ...(sync.server && !sync.user ? [{ label: 'Create account', icon: 'user', run: () => openAuth('signup') }, { label: 'Sign in', icon: 'user', run: () => openAuth('login') }] : []),
     ],
   });
-  $('#palette-btn').onclick = () => Palette.open();
 
   // =====================================================================
   // Storefront, import / export
@@ -1643,13 +1931,6 @@
   const sel = $('#country');
   sel.innerHTML = Object.entries(COUNTRIES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
   sel.onchange = () => { state.country = sel.value; save(); trending = []; loadTrending(); if (activeView === 'charts') loadCharts(); else chartsLoaded = false; runSearch(); };
-  function exportData() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = 'encore-backup.json'; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    toast('Backup exported');
-  }
   $('#import-file').onchange = async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
@@ -1708,7 +1989,7 @@
       renderAll();
       const u = new URLSearchParams(location.search).get('u');
       if (u) openUser(u);
-      afterServices();
+      await afterServices();
       return;
     }
     if (r && !r.json) { sync.server = false; afterServices(); renderAll(); return; } // static hosting: guest mode
@@ -1720,6 +2001,15 @@
   async function afterServices() {
     if (servicesReady) return;
     servicesReady = true;
+    const params = new URLSearchParams(location.search);
+    if (params.get('connected') || params.get('svc_error')) {
+      const k = params.get('connected') || params.get('svc');
+      history.replaceState(null, '', location.pathname + '#profile');
+      if (params.get('connected')) toast(`${svcName(k)} connected`);
+      else toast(params.get('svc_error'));
+      setTimeout(() => showView('profile'), 0);
+    }
+    await loadConnections();
     try {
       if (await Services.Spotify.handleRedirect()) {
         state.connections.spotify = { connectedAt: Date.now(), name: Services.Spotify.profile() };
@@ -1736,7 +2026,7 @@
   // =====================================================================
   $$('[data-icon]').forEach((el) => { el.outerHTML = I[el.dataset.icon] || ''; });
   M.initImageFade();
-  Charts.init({ server: () => sync.server && sync.awake, country: () => state.country, lookup: (ids) => lookupSongs(ids), resolve: resolveTrack, config: CFG });
+  Charts.init({ server: () => sync.server && sync.awake, country: () => state.country, config: CFG });
   bindList($('#results'), (id) => lastResults.find((s) => s.id === id) || state.songs[id]);
   bindList($('#trending'), (id) => trending.find((s) => s.id === id) || state.songs[id]);
   bindList($('#recent'), (id) => recentSongs.find((s) => s.id === id) || state.songs[id]);

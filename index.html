@@ -29,7 +29,6 @@
       <button class="tab" data-view="recs" role="tab" aria-selected="false"><span data-icon="disc"></span><span>Recommendations</span></button>
       <button class="tab" data-view="profile" role="tab" aria-selected="false"><span data-icon="user"></span><span>Profile</span></button>
     </div>
-    <div class="rail-foot desk-only"><button class="btn quiet sm" id="palette-btn"><span data-icon="search"></span>Search <kbd>⌘K</kbd></button></div>
   </nav>
 
   <header class="masthead">
@@ -88,6 +87,10 @@
         <ol id="chart-streamed" class="rows"></ol>
         <div id="chart-streamed-state"></div>
       </div>
+      <div class="section" id="albums-section" hidden>
+        <div class="section-head"><h2>Billboard 200</h2><span class="source" id="albums-source"></span></div>
+        <ol id="chart-albums" class="rows"></ol>
+      </div>
     </section>
 
     <!-- LISTS -->
@@ -98,6 +101,7 @@
         <button data-pane="mine" role="tab">My Lists <span class="muted" id="lists-count"></span></button>
       </div>
       <div id="pane-ratings">
+        <p class="owned small muted" id="ratings-owner" style="margin:var(--s-4) 0 0"></p>
         <div style="display:flex;gap:var(--s-3);flex-wrap:wrap;align-items:center;margin-top:var(--s-4)">
           <div class="seg" id="ratings-seg" role="tablist">
             <button class="active" data-seg="songs">Songs</button><button data-seg="artists">Artists</button><button data-seg="albums">Albums</button>
@@ -153,6 +157,7 @@
   <div class="deck" id="deck" hidden>
     <button class="platter" id="deck-platter" aria-label="Open the song that’s playing"><span class="vinyl" id="deck-vinyl"><span class="lbl"></span></span><span class="tonearm" id="tonearm" aria-hidden="true"><i></i></span></button>
     <div class="meta deck-track" id="deck-meta"></div>
+    <button class="icon-btn" id="deck-fav" aria-label="Favorite" aria-pressed="false"></button>
     <button class="icon-btn" id="deck-toggle" aria-label="Pause"></button>
     <button class="icon-btn" id="deck-next" aria-label="Next song"></button>
     <div class="groove-progress" aria-hidden="true"><i id="deck-progress"></i></div>

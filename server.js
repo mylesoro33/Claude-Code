@@ -179,14 +179,16 @@ function cleanState(s) {
     if (c && typeof c === 'object' && c.connectedAt) connections[k] = { connectedAt: Number(c.connectedAt) || Date.now(), name: str(c.name, 80) };
   }
   // Keep metadata only for songs that are rated or on a list.
-  const keep = new Set([...order, ...lists.flatMap((l) => l.songIds)]);
+  const favorites = ids(s.favorites, 2000);
+  const keep = new Set([...order, ...lists.flatMap((l) => l.songIds), ...favorites]);
   const songs = {};
   for (const [id, x] of Object.entries(s.songs || {})) {
     if (keep.has(id) && x && typeof x === 'object' && id.length < 40) songs[id] = cleanSong(id, x);
   }
   const ratedAt = {};
   for (const [id, t] of Object.entries(s.ratedAt || s.rankedAt || {})) if (keep.has(id) && typeof t === 'number') ratedAt[id] = t;
-  return { songs, order, lists, connections, ratedAt, country: str(s.country, 2) || 'us' };
+  const lookup = s.lookup && typeof s.lookup === 'object' ? { service: str(s.lookup.service, 20), input: str(s.lookup.input, 300), account: str(s.lookup.account, 120), at: Number(s.lookup.at) || 0 } : null;
+  return { songs, order, lists, favorites, connections, lookup, ratedAt, country: str(s.country, 2) || 'us' };
 }
 
 // ---------------- Apple Music developer token (MusicKit) ----------------
