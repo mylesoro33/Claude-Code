@@ -112,3 +112,16 @@ test('developer-token endpoint: 404 when unconfigured, token when configured', a
     assert.equal(r.token.split('.').length, 3);
   });
 });
+
+test('serves app assets but nothing else, and the art proxy only accepts Apple artwork', () => withServer({}, async (base) => {
+  const font = await fetch(base + '/fonts/manrope-latin-wght-normal.woff2');
+  assert.equal(font.status, 200);
+  assert.equal(font.headers.get('content-type'), 'font/woff2');
+  assert.match(font.headers.get('cache-control'), /immutable/);
+  assert.equal((await fetch(base + '/fonts/../server.js')).status, 404);
+  assert.equal((await fetch(base + '/js/../package.json')).status, 404);
+  assert.equal((await fetch(base + '/tests/e2e.js')).status, 404);
+  for (const u of ['https://evil.example.com/a.jpg', 'http://is1-ssl.mzstatic.com/a.jpg', 'https://mzstatic.com.evil.io/a.jpg', 'not a url']) {
+    assert.equal((await fetch(base + '/api/art?u=' + encodeURIComponent(u))).status, 400, u);
+  }
+}));

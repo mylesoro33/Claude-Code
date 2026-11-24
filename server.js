@@ -25,7 +25,14 @@ const STATIC = {
   '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/ranking.js': 'ranking.js',
   '/styles.css': 'styles.css', '/icon.svg': 'icon.svg', '/manifest.webmanifest': 'manifest.webmanifest', '/sw.js': 'sw.js',
 };
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
+// Asset folders served as-is (names restricted so nothing else in the repo is reachable).
+const ASSET_RE = /^\/(js\/[a-z0-9-]+\.js|fonts\/[a-z0-9-]+\.woff2|icons\/[a-z0-9-]+\.(png|svg))$/;
+const MIME = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.woff2': 'font/woff2',
+};
+const ART_HOST_RE = /^is\d+(-ssl)?\.mzstatic\.com$/;
+const MAX_ART = 3 * 1024 * 1024;
 
 // ---------------- Database ----------------
 function openDb(file) {
@@ -315,6 +322,21 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       return send(res, 200, { token: devToken.token });
     }
 
+    // Album-art proxy: same-origin copies of Apple artwork, so the app can read
+    // pixel colors and draw covers onto the share-card canvas. Apple hosts only.
+    if (p === '/api/art' && m === 'GET') {
+      let target;
+      try { target = new URL(url.searchParams.get('u') || ''); } catch { return send(res, 400, { error: 'Bad URL' }); }
+      if (target.protocol !== 'https:' || !ART_HOST_RE.test(target.hostname)) return send(res, 400, { error: 'Only Apple artwork is allowed' });
+      const up = await fetch(target, { headers: { 'User-Agent': 'Encore/2.0' } });
+      const type = up.headers.get('content-type') || '';
+      if (!up.ok || !/^image\/(jpeg|png|webp)/.test(type)) return send(res, 502, { error: 'Artwork unavailable' });
+      const buf = Buffer.from(await up.arrayBuffer());
+      if (buf.length > MAX_ART) return send(res, 502, { error: 'Artwork too large' });
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=604800', 'X-Content-Type-Options': 'nosniff' });
+      return res.end(buf);
+    }
+
     // Apple public catalog proxy: /api/catalog/search, /api/catalog/lookup, /api/catalog/charts
     if (p.startsWith('/api/catalog/') && m === 'GET') {
       const country = (url.searchParams.get('country') || 'us').toLowerCase().replace(/[^a-z]/g, '').slice(0, 2) || 'us';
@@ -339,11 +361,14 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
   }
 
   function serveStatic(req, res, url) {
-    const file = STATIC[url.pathname];
+    const asset = url.pathname.match(ASSET_RE);
+    const file = STATIC[url.pathname] || (asset && asset[1]);
     if (!file) return send(res, 404, 'Not found');
     fs.readFile(path.join(ROOT, file), (err, buf) => {
       if (err) return send(res, 404, 'Not found');
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+      // Fonts and icons never change name-for-content; everything else revalidates.
+      const cache = /^(fonts|icons)\//.test(file) ? 'public, max-age=2592000, immutable' : 'no-cache';
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff' });
       res.end(buf);
     });
   }
