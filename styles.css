@@ -205,6 +205,7 @@ main { position: relative; max-width: 720px; margin: 0 auto; padding-left: var(-
 @keyframes v-pop { from { opacity: 0; transform: translate3d(-28px, 0, 0); } }
 .page-head { position: relative; padding: var(--s-6) 0 var(--s-4); overflow: hidden; }
 .page-head h1 { margin: 4px 0 0; font-size: var(--fs-3xl); }
+#h-recs { font-size: clamp(1.9rem, 9.2vw, 4rem); } /* the longest tab name still fits on a phone */
 .page-head p { margin: var(--s-2) 0 0; color: var(--cream-2); max-width: 46ch; }
 .page-head .groove-art { /* a record half-sunk behind the title */
   position: absolute; right: -70px; top: -40px; width: 200px; height: 200px; border-radius: 50%; z-index: -1; opacity: .5;

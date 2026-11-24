@@ -1,30 +1,40 @@
-// End-to-end UI test: real Encore server (in-process, temp DB) + mocked Apple
-// catalog, artwork and preview audio. Checks every feature, at phone and
-// desktop widths, and saves screenshots.
+// End-to-end UI test: a real Encore server (in-process, temp DB) with Apple's
+// catalog, artwork, preview audio and MusicKit mocked. Exercises every feature
+// at phone (390px) and desktop (1280px) widths and saves screenshots.
 // Usage: node tests/e2e.js [screenshotDir]
 const { chromium } = require('playwright');
 const { createApp } = require('../server.js');
 const out = process.argv[2] || '.';
 
 const rows = [
-  ['Midnight Drive', 'Nova Lane', 'Night Shift', 'Pop', ['#1b1f5e', '#ff4f9a', '#ffb347']],
-  ['Golden Hour (Extended Sunset Version) [feat. The Very Long Name Orchestra]', 'Kite Club', 'Sunline', 'Indie', ['#ffcf5c', '#ff7a3d', '#2a1a4a']],
-  ['Static', 'Nova Lane', 'Night Shift', 'Pop', ['#1b1f5e', '#ff4f9a', '#ffb347']],
+  ['Midnight Drive', 'Nova Lane', 'Night Shift', 'Pop', ['#3b1d12', '#c8552a', '#f2d9a6']],
+  ['Golden Hour (Extended Sunset Version) [feat. The Very Long Name Orchestra]', 'Kite Club', 'Sunline', 'Pop', ['#f2c46b', '#c4572c', '#2b1a12']],
+  ['Static', 'Nova Lane', 'Night Shift', 'Pop', ['#3b1d12', '#c8552a', '#f2d9a6']],
   ['Paper Planes', 'The Oaks', 'Timber', 'Rock', null],
-  ['Low Tide', 'Mira', 'Harbor', 'R&B', ['#0b3d4f', '#2ad1c9', '#e8fff9']],
-  ['Neon Rain', 'Kite Club', 'Sunline', 'Indie', ['#ffcf5c', '#ff7a3d', '#2a1a4a']],
+  ['Low Tide', 'Mira', 'Harbor', 'R&B/Soul', ['#14302f', '#5e8f7e', '#efe2c6']],
+  ['Neon Rain', 'Kite Club', 'Sunline', 'Pop', ['#f2c46b', '#c4572c', '#2b1a12']],
   ['Saltwater', 'The Oaks', 'Timber', 'Rock', null],
-  ['Glass House', 'Mira', 'Harbor', 'R&B', ['#0b3d4f', '#2ad1c9', '#e8fff9']],
+  ['Glass House', 'Mira', 'Harbor', 'R&B/Soul', ['#14302f', '#5e8f7e', '#efe2c6']],
 ];
 const albums = [...new Set(rows.map((r) => r[2]))];
-const songs = rows.map(([n, a, al, g], i) => ({
-  kind: 'song', wrapperType: 'track', trackId: 1000 + i, trackName: n, artistName: a, collectionName: al,
+const itunes = (n, a, al, g, i, id) => ({
+  kind: 'song', wrapperType: 'track', trackId: id, trackName: n, artistName: a, collectionName: al,
   artistId: 50 + i, collectionId: 90 + albums.indexOf(al), primaryGenreName: g, releaseDate: '2025-01-01',
   // "Timber" covers are broken on purpose → generated placeholder art.
   artworkUrl100: `https://is1-ssl.mzstatic.com/image/thumb/Music/mock${albums.indexOf(al)}/100x100bb.jpg`,
   previewUrl: `https://audio-ssl.itunes.apple.com/mock/${i}.m4a`, trackViewUrl: 'https://music.apple.com/', trackExplicitness: i === 2 ? 'explicit' : 'none',
-}));
-const taste = [3, 9, 1, 7, 5, 8, 2, 6]; // hidden "true" preferences (all loved)
+});
+const songs = rows.map(([n, a, al, g], i) => itunes(n, a, al, g, i, 1000 + i));
+// Deeper cuts by the same artists: in search, never in the charts, never rated by the test user.
+songs.push(itunes('Paper Moon', 'Kite Club', 'Sunline', 'Pop', 1, 1008), itunes('Undertow', 'Mira', 'Harbor', 'R&B/Soul', 4, 1009), itunes('Afterglow', 'Nova Lane', 'Night Shift', 'Pop', 0, 1010));
+const chartSongs = songs.slice(0, 8);
+const asSong = (r) => ({ id: String(r.trackId), title: r.trackName, artist: r.artistName, album: r.collectionName, art: r.artworkUrl100, preview: r.previewUrl, url: r.trackViewUrl, genre: r.primaryGenreName, year: '2025', explicit: false, artistId: String(r.artistId), albumId: String(r.collectionId) });
+const taste = { 1000: 3, 1001: 9, 1002: 1, 1003: 7, 1004: 5, 1005: 8, 1006: 2, 1007: 6 }; // hidden "true" preferences
+/** Any search term with no mock match becomes its own song (lets sample chart lists resolve). */
+function synth(term) {
+  let h = 7; for (const c of term) h = (h * 31 + c.charCodeAt(0)) % 900000;
+  return { ...itunes(term.replace(/^\S+\s/, ''), term.split(' ')[0], 'Sample Album', 'Pop', h % 3, 200000 + h), artworkUrl100: '' };
+}
 
 function wav(seconds = 4, rate = 22050) {
   const n = seconds * rate;
@@ -32,11 +42,7 @@ function wav(seconds = 4, rate = 22050) {
   buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVEfmt ', 8);
   buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22); buf.writeUInt32LE(rate, 24);
   buf.writeUInt32LE(rate * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34); buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
-  for (let i = 0; i < n; i++) {
-    const t = i / rate;
-    const v = 0.3 * Math.sin(2 * Math.PI * 220 * t) * (0.6 + 0.4 * Math.sin(2 * Math.PI * 2 * t)) + 0.15 * Math.sin(2 * Math.PI * 660 * t);
-    buf.writeInt16LE(Math.round(v * 32767 * 0.5), 44 + i * 2);
-  }
+  for (let i = 0; i < n; i++) { const t = i / rate; buf.writeInt16LE(Math.round((0.3 * Math.sin(2 * Math.PI * 220 * t) + 0.15 * Math.sin(2 * Math.PI * 660 * t)) * 16000), 44 + i * 2); }
   return buf;
 }
 const AUDIO = wav();
@@ -47,337 +53,350 @@ async function makeCovers(browser) {
   for (const [, , al, , pal] of rows) {
     const i = albums.indexOf(al);
     if (!pal || covers[i]) continue;
-    await p.setContent(`<body style="margin:0"><div style="width:300px;height:300px;position:relative;overflow:hidden;background:linear-gradient(135deg,${pal[0]},${pal[1]} 60%,${pal[2]})">
-      <div style="position:absolute;width:220px;height:220px;border-radius:50%;left:${40 + i * 20}px;top:${30 + i * 15}px;background:radial-gradient(circle at 35% 35%,${pal[2]},${pal[1]} 55%,transparent 70%);opacity:.9"></div>
-      <div style="position:absolute;left:18px;bottom:16px;font:800 30px/1 sans-serif;color:${pal[2]};letter-spacing:-1px;mix-blend-mode:screen">${al.toUpperCase()}</div></div></body>`);
+    await p.setContent(`<body style="margin:0"><div style="width:300px;height:300px;position:relative;overflow:hidden;background:${pal[0]}">
+      <div style="position:absolute;left:-40px;top:${60 + i * 30}px;width:380px;height:90px;background:${pal[1]};transform:rotate(-12deg)"></div>
+      <div style="position:absolute;right:24px;top:24px;width:${70 + i * 20}px;height:${70 + i * 20}px;border-radius:50%;background:${pal[2]}"></div>
+      <div style="position:absolute;left:18px;bottom:16px;font:900 32px/1 Georgia,serif;color:${pal[2]}">${al}</div></div></body>`);
     covers[i] = await p.screenshot({ type: 'png' });
   }
   await p.close();
   return covers;
 }
 
-async function mockApple(page, covers, counters = {}) {
+async function mockApple(page, covers, counters = {}, { musickit = true, recentFails = false } = {}) {
   page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); process.exitCode = 1; });
-  const charts = { feed: { results: songs.map((s) => ({ id: String(s.trackId) })) } };
   const count = (k) => { counters[k] = (counters[k] || 0) + 1; };
-  await page.route('**/api/catalog/charts*', (r) => { count('charts'); r.fulfill({ json: charts }); });
-  await page.route('**/api/catalog/lookup*', (r) => {
-    const ids = new URL(r.request().url()).searchParams.get('id').split(',');
-    r.fulfill({ json: { results: songs.filter((s) => ids.includes(String(s.trackId))) } });
-  });
-  await page.route('**/api/catalog/search*', (r) => {
-    count('search');
-    const term = new URL(r.request().url()).searchParams.get('term').toLowerCase();
-    r.fulfill({ json: { results: songs.filter((s) => `${s.trackName} ${s.artistName}`.toLowerCase().includes(term) || term === 'all') } });
-  });
-  // The same data when the app talks to Apple directly (no server yet, or the server is asleep).
+  const charts = { feed: { results: chartSongs.map((s) => ({ id: String(s.trackId) })) } };
+  const search = (term) => {
+    const t = term.toLowerCase();
+    const hits = songs.filter((s) => `${s.trackName} ${s.artistName}`.toLowerCase().includes(t) || t === 'all' || t.split(' ').some((w) => w.length > 2 && s.artistName.toLowerCase() === t));
+    return hits.length ? hits : [synth(term)];
+  };
+  const lookup = (ids) => ids.map((id) => songs.find((s) => String(s.trackId) === id) || null).filter(Boolean);
   const cors = { 'Access-Control-Allow-Origin': '*' };
+  await page.route('**/api/catalog/charts*', (r) => { count('charts'); r.fulfill({ json: charts }); });
+  await page.route('**/api/catalog/lookup*', (r) => r.fulfill({ json: { results: lookup(new URL(r.request().url()).searchParams.get('id').split(',')) } }));
+  await page.route('**/api/catalog/search*', (r) => { count('search'); r.fulfill({ json: { results: search(new URL(r.request().url()).searchParams.get('term')) } }); });
+  // Genre charts: Apple has a feed for every genre but Indie; Most Streamed has no Last.fm key → placeholders.
+  await page.route('**/api/charts/current*', (r) => {
+    const g = new URL(r.request().url()).searchParams.get('genre');
+    if (g === 'indie') return r.fulfill({ status: 404, json: { error: 'no feed' } });
+    const order = g === 'edm' ? [5, 1, 0, 4, 2, 3, 6, 7] : [1, 5, 3, 7, 4, 0, 6, 2];
+    r.fulfill({ json: { source: 'Apple Music', songs: order.map((i) => asSong(songs[i])) } });
+  });
+  await page.route('**/api/charts/streamed*', (r) => r.fulfill({ status: 404, json: { error: 'Most Streamed needs a Last.fm API key' } }));
   await page.route('https://rss.marketingtools.apple.com/**', (r) => { count('charts'); r.fulfill({ json: charts, headers: cors }); });
   await page.route('https://itunes.apple.com/**', (r) => {
     const u = new URL(r.request().url());
-    if (u.pathname === '/lookup') { const ids = u.searchParams.get('id').split(','); return r.fulfill({ json: { results: songs.filter((x) => ids.includes(String(x.trackId))) }, headers: cors }); }
-    if (u.pathname === '/search') { count('search'); const t = (u.searchParams.get('term') || '').toLowerCase(); return r.fulfill({ json: { results: songs.filter((x) => `${x.trackName} ${x.artistName}`.toLowerCase().includes(t)) }, headers: cors }); }
+    if (u.pathname === '/lookup') return r.fulfill({ json: { results: lookup(u.searchParams.get('id').split(',')) }, headers: cors });
+    if (u.pathname === '/search') { count('search'); return r.fulfill({ json: { results: search(u.searchParams.get('term') || '') }, headers: cors }); }
     r.abort();
   });
   const serveArt = (r, url) => {
     const m = url.match(/mock(\d+)/);
     const png = m && covers[+m[1]];
     if (!png) return r.abort();
-    r.fulfill({ body: png, contentType: 'image/png', headers: { 'Access-Control-Allow-Origin': '*' } });
+    r.fulfill({ body: png, contentType: 'image/png', headers: cors });
   };
   await page.route('https://is1-ssl.mzstatic.com/**', (r) => serveArt(r, r.request().url()));
   await page.route((u) => u.pathname === '/api/art', (r) => serveArt(r, new URL(r.request().url()).searchParams.get('u') || ''));
-  await page.route('https://audio-ssl.itunes.apple.com/**', (r) => r.fulfill({ body: AUDIO, contentType: 'audio/wav', headers: { 'Access-Control-Allow-Origin': '*' } }));
+  await page.route('https://audio-ssl.itunes.apple.com/**', (r) => r.fulfill({ body: AUDIO, contentType: 'audio/wav', headers: cors }));
+  if (!musickit) return;
+  // Apple Music: a MusicKit stand-in plus the recently-played endpoint.
+  await page.route('**/api/config', (r) => r.fulfill({ json: { appleMusic: true, spotifyClientId: '', lastfm: false } }));
+  await page.route('**/api/apple/developer-token', (r) => r.fulfill({ json: { token: 'test-developer-token' } }));
+  await page.route('https://api.music.apple.com/**', (r) => {
+    if (recentFails) return r.fulfill({ status: 500, body: 'nope', headers: cors });
+    const data = [1, 5, 3, 4, 0].map((i) => ({ id: String(1000 + i), type: 'songs', attributes: {
+      name: songs[i].trackName, artistName: songs[i].artistName, albumName: songs[i].collectionName, genreNames: [songs[i].primaryGenreName, 'Music'],
+      artwork: { url: songs[i].artworkUrl100.replace('100x100bb', '{w}x{h}bb') }, previews: [{ url: songs[i].previewUrl }], url: 'https://music.apple.com/', releaseDate: '2025-01-01' } }));
+    r.fulfill({ json: { data }, headers: cors });
+  });
+  await page.addInitScript(() => {
+    const music = { isAuthorized: false, musicUserToken: '', storefrontId: 'us', playbackState: 0, currentPlaybackProgress: 0,
+      async authorize() { await new Promise((res) => setTimeout(res, 150)); this.isAuthorized = true; this.musicUserToken = 'user-token'; return 'user-token'; },
+      async unauthorize() { this.isAuthorized = false; }, addEventListener() {}, async setQueue() { throw new Error('preview only in tests'); }, stop() {}, pause() {}, play() {} };
+    window.MusicKit = { configure: async () => music, PlaybackStates: { playing: 2, paused: 3, completed: 10, ended: 5 } };
+  });
 }
 
-async function rank(page, i, { shotCompare, shotReact } = {}) {
-  await page.locator(`#results li[data-id="${1000 + i}"] [data-act="rank"]`).click();
-  await page.waitForSelector('.react.liked');
-  if (shotReact) { await page.waitForTimeout(700); await page.screenshot({ path: `${out}/${shotReact}` }); }
-  await page.click('.react.liked');
+const check = (label, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`); if (!ok) process.exitCode = 1; };
+const noOverflow = (p) => p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+const settle = (p, ms = 600) => p.waitForTimeout(ms);
+async function closeSheet(p) {
+  const done = p.locator('[data-done="close"]');
+  if (await done.count()) await done.click(); else await p.keyboard.press('Escape');
+  await p.waitForSelector('#sheet', { state: 'hidden' });
+}
+/** Rate a song through the sheet, answering better/worse from `taste`. Returns how many questions were asked. */
+async function rateVia(page, rowSel, { shot } = {}) {
+  await page.locator(rowSel).first().click();
+  await page.waitForSelector('#sheet .step');
   let q = 0;
-  while (await page.locator('.versus').count()) {
+  while (await page.locator('#sheet .answers').count()) {
     q++;
-    if (shotCompare && q === 1) { await page.waitForTimeout(500); await page.screenshot({ path: `${out}/${shotCompare}` }); }
-    const opp = Number(await page.locator('.versus [data-choose="old"]').getAttribute('data-id')) - 1000;
-    await page.click(taste[i] > taste[opp] ? '.versus [data-choose="new"]' : '.versus [data-choose="old"]');
-    await page.waitForTimeout(260);
+    if (shot && q === 1) { await settle(page, 450); await page.screenshot({ path: `${out}/${shot}` }); }
+    const ids = await page.$$eval('#sheet .duelist [data-vinyl]', (els) => els.map((e) => e.dataset.vinyl));
+    await page.click(taste[ids[0]] > taste[ids[1]] ? '[data-ans="better"]' : '[data-ans="worse"]');
+    await settle(page, 220);
   }
   await page.waitForSelector('[data-done="close"]');
   return q;
 }
-const check = (label, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`); if (!ok) process.exitCode = 1; };
-const noOverflow = (p) => p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
-const settle = (p, ms = 700) => p.waitForTimeout(ms);
-async function closeSheet(p) { await p.click('[data-done="close"]').catch(() => p.keyboard.press('Escape')); await p.waitForSelector('#sheet', { state: 'hidden' }); }
-
-/** Synthetic touch drag via CDP (pull-to-refresh is a touch gesture). */
-async function touchDrag(page, x, y0, y1) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: y0 }] });
-  for (let i = 1; i <= 12; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y0 + ((y1 - y0) * i) / 12 }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-}
-/** Horizontal pointer swipe on a row. */
-async function swipe(page, sel, dx) {
-  // Bring the row to mid-screen (the tab bar and mini player float over the bottom).
-  await page.locator(sel).evaluate((el) => window.scrollBy(0, el.getBoundingClientRect().top - window.innerHeight / 2));
-  await page.waitForTimeout(250);
-  const box = await page.locator(sel).boundingBox();
-  const y = box.y + box.height / 2, x0 = box.x + box.width / 2;
-  await page.mouse.move(x0, y); await page.mouse.down();
-  for (let i = 1; i <= 10; i++) await page.mouse.move(x0 + (dx * i) / 10, y + i * 0.3);
-  await page.mouse.up();
-  await settle(page, 600);
+async function seedCommunity(base) {
+  // Three listeners who agree with the test user's taste and love Glass House (1007), which the test user never rates.
+  const orders = [[1001, 1007, 1008, 1005, 1003, 1004, 1000, 1006, 1002], [1007, 1001, 1005, 1008, 1003, 1000, 1004, 1006, 1002], [1007, 1001, 1003, 1005, 1004, 1000, 1002, 1006, 1010]];
+  for (const [i, ord] of orders.entries()) {
+    let cookie = '';
+    const call = async (path, method, body) => {
+      const r = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(body) });
+      const sc = r.headers.get('set-cookie'); if (sc) cookie = sc.split(';')[0];
+      return r;
+    };
+    await call('/api/signup', 'POST', { email: `listener${i}@example.com`, username: `listener_${i + 1}`, password: 'correct horse' });
+    const ids = ord.map(String);
+    await call('/api/state', 'PUT', { state: { order: ids, songs: Object.fromEntries(ids.map((id) => [id, asSong(songs.find((x) => String(x.trackId) === id))])), lists: [] } });
+  }
 }
 
 async function main() {
   const server = createApp({ dbPath: ':memory:', env: {} });
   await new Promise((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${server.address().port}/`;
+  await seedCommunity(base.slice(0, -1));
   const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
   const covers = await makeCovers(browser);
   const phone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, serviceWorkers: 'block' };
   try {
-    // ================= Phone: guest → account =================
-    const counters = {};
-    const ctx1 = await browser.newContext(phone);
-    const p = await ctx1.newPage();
-    await mockApple(p, covers, counters);
+    // ================= Phone =================
+    const ctx = await browser.newContext(phone);
+    const p = await ctx.newPage();
+    await mockApple(p, covers);
     await p.goto(base);
-    await p.waitForSelector('#results li.row');
+    await p.waitForSelector('#trending li.row');
+    await settle(p, 900);
+    check('Navigation is Home, Charts, Lists, Recommendations, Profile', JSON.stringify(await p.$$eval('.tab', (t) => t.map((x) => x.innerText.trim()))) === JSON.stringify(['HOME', 'CHARTS', 'LISTS', 'RECOMMENDATIONS', 'PROFILE']));
+    check('Later tab, shortcuts and Reset are gone', (await p.locator('[data-view="later"], #shortcuts-btn, #reset, #later').count()) === 0);
+    check('Home shows the not-connected Apple Music state', /Connect Apple Music/.test(await p.locator('#recent-state').innerText()));
+    check('No horizontal overflow at 390px (Home)', await noOverflow(p));
+    await p.screenshot({ path: `${out}/01-home.png` });
+
+    // Apple Music → recently played
+    await p.locator('#recent-state .btn', { hasText: 'Connect Apple Music' }).click();
+    await p.waitForSelector('#recent li.row');
+    await settle(p, 900);
+    check('Recently played appears after connecting, each with "Rate this"', (await p.locator('#recent li.row').count()) === 5 && (await p.locator('#recent .rate-btn', { hasText: 'Rate this' }).count()) === 5);
+    await p.screenshot({ path: `${out}/02-home-recently-played.png` });
+
+    // First song → automatic 10
+    await p.locator('#recent li.row[data-id="1001"] .rate-btn').click();
+    await p.waitForSelector('#big-score');
+    check('First song skips the questions', (await p.locator('#sheet .answers').count()) === 0);
+    await settle(p, 1500);
+    check('First song is scored 10', (await p.locator('#big-score').innerText()) === '10');
+    await p.screenshot({ path: `${out}/03-first-song-10.png` });
+    await closeSheet(p);
+
+    // Everything after: better/worse until placed
+    let shot = '04-better-or-worse.png';
+    for (const id of [1005, 1003, 1004, 1000]) {
+      await rateVia(p, `#recent li.row[data-id="${id}"] .rate-btn`, { shot });
+      shot = null;
+      await closeSheet(p);
+    }
+    await p.fill('#search', 'all');
+    await p.waitForSelector('#results li.row[data-id="1006"]');
+    await rateVia(p, '#results li.row[data-id="1006"] .rate-btn');
+    await closeSheet(p);
+    const q = await rateVia(p, '#results li.row[data-id="1002"] .rate-btn');
+    check('Placement takes at most log2(n)+1 questions', q <= 3);
+    await settle(p, 1400);
+    await p.screenshot({ path: `${out}/05-rated-result.png` });
+    await closeSheet(p);
+    await p.fill('#search', '');
+
+    // Deck: play a preview → turntable bar, tonearm drops onto the record
+    await p.locator('#recent li.row[data-id="1005"] [data-act="play"]').click();
+    await p.waitForSelector('#deck:not([hidden])');
     await settle(p, 1200);
-    check('Discover renders chart rows', (await p.locator('#results li.row').count()) === 8);
-    check('No horizontal overflow at 390px (Discover)', await noOverflow(p));
-    const rowColor = await p.locator('#results li.row').first().evaluate((el) => el.style.getPropertyValue('--c'));
-    check('Rows take their color from the album art', /^\d+,\d+,\d+$/.test(rowColor.trim()));
-    await p.screenshot({ path: `${out}/01-discover.png` });
+    const arm = await p.$eval('#tonearm', (el) => el.style.getPropertyValue('--arm'));
+    check('Turntable deck plays and the tonearm tracks progress', arm !== '-32deg' && arm !== '' && (await p.locator('#deck-vinyl.spin').count()) === 1);
+    await p.screenshot({ path: `${out}/06-turntable-deck.png` });
+    await p.click('#deck-toggle');
 
-    // Preview playback + mini player
-    await p.locator('#results li[data-id="1001"] [data-act="play"]').click();
-    await p.waitForSelector('#mini:not([hidden])');
+    // Sign up: email + unique username (availability check)
+    await p.click('#me-btn');
+    await p.waitForSelector('#auth-form [name=email]');
+    await p.fill('#auth-form [name=username]', 'listener_1');
+    await p.waitForFunction(() => /taken/.test(document.querySelector('#u-hint').textContent));
+    check('Sign-up flags a taken username', true);
+    await p.fill('#auth-form [name=username]', 'maya');
+    await p.waitForFunction(() => /available/.test(document.querySelector('#u-hint').textContent));
+    await p.fill('#auth-form [name=email]', 'maya@example.com');
+    await p.fill('#auth-form [name=password]', 'correct horse');
+    await p.screenshot({ path: `${out}/07-sign-up.png` });
+    await p.click('#auth-form button[type=submit]');
+    await p.waitForSelector('#me-btn.has-avatar');
+    check('Guest ratings move into the new account', /7 ratings/.test(await p.locator('#toast').innerText()));
+
+    // Charts
+    await p.click('.tab[data-view="charts"]');
+    await p.waitForSelector('#chart-current li.row');
+    await p.waitForSelector('#chart-streamed li.row');
     await settle(p, 900);
-    check('Mini player appears and is playing', (await p.locator('#mini-toggle').getAttribute('aria-label')) === 'Pause');
-    check('Playing row shows the equalizer', (await p.locator('#results li[data-id="1001"] .eq').count()) === 1);
-    await p.screenshot({ path: `${out}/02-discover-playing.png` });
-    // Crossfade to the next song via the mini player
-    await p.click('#mini-next');
+    check('12 genre tabs', (await p.locator('#genre-strip button').count()) === 12);
+    check('Current Chart from Apple Music; Most Streamed clearly marked as placeholder', /Apple Music/i.test(await p.locator('#current-source').innerText()) && /Placeholder/i.test(await p.locator('#streamed-source').innerText()) && /Last\.fm/.test(await p.locator('#streamed-note').innerText()));
+    check('Every chart row has Rate (or your score) and Add to list', (await p.$$eval('#chart-current li.row', (ls) => ls.every((l) => l.querySelector('.rate-btn, .sticker') && l.querySelector('[data-act="list"]')))));
+    check('No horizontal overflow (Charts)', await noOverflow(p));
+    await p.screenshot({ path: `${out}/08-charts.png` });
+    await p.click('#genre-strip [data-genre="indie"]');
+    await p.waitForFunction(() => /Placeholder/i.test(document.querySelector('#current-source').textContent));
+    check('A genre with no live feed falls back to labelled placeholder data', true);
+    await p.click('#genre-strip [data-genre="pop"]');
+    await p.waitForSelector('#chart-current li.row[data-id="1007"]');
+    // Add to a new list straight from a chart row
+    await p.locator('#chart-current li.row[data-id="1007"] [data-act="list"]').click();
+    await p.click('#pick-new');
+    await p.fill('#new-list-form [name=name]', 'Gym Songs');
+    await p.click('#new-list-form button');
+    await settle(p, 500);
+    check('List created from a chart row', /Added to “Gym Songs”/.test(await p.locator('#toast').innerText()));
+
+    // Lists: ratings
+    await p.click('.tab[data-view="lists"]');
     await settle(p, 700);
-    check('Next song plays from the same list', (await p.locator('#mini-meta .t1').innerText()) === 'Static');
-    await p.click('#mini-toggle');
+    const order = await p.$$eval('#ratings li.row', (ls) => ls.map((l) => l.dataset.id));
+    const scores = await p.$$eval('#ratings .sticker', (s) => s.map((x) => x.textContent));
+    check('Ratings are in taste order', JSON.stringify(order) === JSON.stringify(['1001', '1005', '1003', '1004', '1000', '1006', '1002']));
+    check('Scores are re-spread from a top 10', JSON.stringify(scores) === JSON.stringify(['10', '8.6', '7.1', '5.7', '4.3', '2.9', '1.4']));
+    await p.screenshot({ path: `${out}/09-my-ratings.png` });
+    await p.click('#ratings-seg [data-seg="artists"]');
+    await settle(p, 500);
+    check('Artist averages still work', (await p.locator('#ratings li.group').count()) === 4);
+    await p.screenshot({ path: `${out}/10-artist-averages.png` });
+    await p.click('#ratings-seg [data-seg="songs"]');
 
-    // Instant cached search
-    await p.fill('#search', 'mira');
-    await p.waitForFunction(() => document.querySelector('#results-title').textContent.includes('mira') && document.querySelectorAll('#results li.row').length === 2);
-    const searches = counters.search;
-    await p.fill('#search', '');
-    await settle(p, 400);
-    await p.fill('#search', 'mira');
-    await settle(p, 300);
-    check('Repeat search is served from cache (no new request)', searches === 1 && counters.search === 1 && (await p.locator('#results li.row').count()) === 2);
-    await p.fill('#search', '');
-    await p.waitForSelector('#results li.row[data-id="1007"]');
-
-    // Rank 3 songs as a guest
-    let shotDone = false;
-    for (const i of [0, 1, 2]) {
-      await rank(p, i, { shotCompare: i === 2 ? '04-compare.png' : null, shotReact: i === 1 ? '03-rank-react.png' : null });
-      await closeSheet(p);
-    }
-
-    // Sign up (guest list moves in)
-    await p.click('#account-btn');
-    await p.click('[data-switch="signup"]');
-    await p.fill('input[name=displayName]', 'Maya Chen');
-    await p.fill('input[name=username]', 'maya');
-    await p.fill('input[name=password]', 'correct horse');
-    await p.screenshot({ path: `${out}/05-signup.png` });
-    await p.click('#auth-form button');
-    await p.waitForSelector('#account-btn .avatar');
-    check('Guest songs moved into the new account', (await p.locator('#toast').innerText()).includes('3 ranked songs'));
-
-    for (const i of [3, 4, 5, 6, 7]) {
-      await rank(p, i);
-      if (i === 6 && !shotDone) { await settle(p, 1500); await p.screenshot({ path: `${out}/06-ranked-score.png` }); shotDone = true; }
-      await closeSheet(p);
-    }
-    const counted = await p.evaluate(() => [...document.querySelectorAll('#results .ring-num')].map((n) => n.textContent));
-    check('Score rings show final values after the count-up', counted.length > 0 && counted.every((t) => /^(10|\d\.\d)$/.test(t) && t !== '0.0'));
-
-    // My List + drag to rank
-    await p.click('.tab[data-view="list"]');
-    await settle(p, 900);
-    const expected = rows.map((r, i) => [r[0], taste[i]]).sort((a, b) => b[1] - a[1]).map((x) => x[0]);
-    const titles = async () => p.$$eval('#ranked .t1', (els) => els.map((e) => e.firstChild.textContent));
-    check('My List is in the right order', JSON.stringify(await titles()) === JSON.stringify(expected));
-    check('Long titles stay on one line (no overflow)', await noOverflow(p));
-    await p.screenshot({ path: `${out}/07-my-list.png` });
-    const last = p.locator('#ranked li.row').last();
-    await p.evaluate(() => { const r = [...document.querySelectorAll('#ranked li.row')]; window.scrollTo(0, r[r.length - 1].getBoundingClientRect().top + scrollY - 420); });
-    await settle(p, 300);
-    const grip = await last.locator('.grip').boundingBox();
-    const firstBox = await p.locator('#ranked li.row').first().boundingBox();
-    await p.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
-    await p.mouse.down();
-    for (let i = 1; i <= 16; i++) await p.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 + ((firstBox.y + 10 - grip.y) * i) / 16);
-    await settle(p, 200);
-    await p.screenshot({ path: `${out}/08-dragging.png` });
+    // Lists: custom list editing
+    await p.click('#lists-strip [data-pane="mine"]');
+    await p.click('[data-list]');
+    await p.waitForSelector('#view-list.active');
+    await p.click('[data-la="add"]');
+    await p.click('#adder-strip [data-m="ratings"]');
+    await p.locator('#adder-results li.row[data-id="1001"] [data-act="toggle"]').click();
+    await p.locator('#adder-results li.row[data-id="1003"] [data-act="toggle"]').click();
+    await p.keyboard.press('Escape');
+    await p.waitForSelector('#sheet', { state: 'hidden' });
+    check('Songs added from ratings', (await p.locator('#list-songs li.row').count()) === 3);
+    const grip = await p.locator('#list-songs li.row').last().locator('.grip').boundingBox();
+    const first = await p.locator('#list-songs li.row').first().boundingBox();
+    await p.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2); await p.mouse.down();
+    for (let i = 1; i <= 12; i++) await p.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 + ((first.y + 8 - grip.y) * i) / 12);
     await p.mouse.up();
     await settle(p, 900);
-    const after = await titles();
-    check('Drag-to-rank moves the last song to #1', after[0] === expected[expected.length - 1] && /Moved to #1/.test(await p.locator('#toast').innerText()));
-    await p.click('.toast-act');
+    check('Drag re-orders a list', (await p.locator('#list-songs li.row').first().getAttribute('data-id')) === '1003');
+    await p.click('#list-public');
+    await settle(p, 300);
+    check('Lists can be made private', /Private list/i.test(await p.locator('#list-detail').innerText()));
+    await p.screenshot({ path: `${out}/11-list-detail.png` });
+    await p.locator('#list-songs li.row[data-id="1007"] [data-act="remove"]').click();
     await settle(p, 400);
-    check('Undo restores the previous order', JSON.stringify(await titles()) === JSON.stringify(expected));
-
-    // Artists / albums
-    await p.click('#list-seg [data-seg="artists"]');
-    await settle(p, 900);
-    const artists = await p.$$eval('#ranked li.group', (lis) => lis.map((l) => [l.querySelector('.t1').textContent, l.querySelector('.ring').dataset.value]));
-    check('Artist averages, highest first', artists[0][0] === 'Kite Club' && artists[0][1] === '9.8' && artists.length === 4);
-    check('A perfect score reads "10" so it fits the ring', (await p.$$eval('#results .ring-num, #ranked .ring-num', (n) => n.map((x) => x.textContent))).every((t) => t !== '10.0'));
-    await p.screenshot({ path: `${out}/09-artists.png` });
-    await p.click('#list-seg [data-seg="albums"]');
-    await settle(p, 600);
-    await p.locator('#ranked li.group').nth(1).locator('.cover').click();
-    await settle(p, 1400);
-    check('Album page opens with its songs', (await p.locator('#view-group.active #group-list li.row').count()) === 2);
-    await p.screenshot({ path: `${out}/10-album-page.png` });
-    await p.click('#view-group [data-back]');
+    check('Songs can be removed from a list', (await p.locator('#list-songs li.row').count()) === 2);
+    await p.click('#view-list [data-back]');
+    // A second, public list made from a rating's detail sheet
+    await p.click('#lists-strip [data-pane="ratings"]');
+    await p.locator('#ratings li.row[data-id="1005"] .meta').click();
+    await p.click('[data-detail="list"]');
+    await p.click('#pick-new');
+    await p.fill('#new-list-form [name=name]', 'Best Pop Song');
+    await p.click('#new-list-form button');
     await settle(p, 500);
-    check('Back returns to My List', await p.locator('#view-list.active').count() === 1);
 
-    // Discover gestures: swipe right → Later, swipe left → skip, pull to refresh
-    await p.click('.tab[data-view="discover"]');
-    await settle(p, 600);
-    await swipe(p, '#results li.row[data-id="1006"] .row-body', 230);
-    check('Swipe right saves to Later', (await p.locator('#later-count').innerText()) === '1');
-    const before = await p.locator('#results li.row').count();
-    await swipe(p, '#results li.row[data-id="1002"] .row-body', -230);
-    check('Swipe left skips the song', (await p.locator('#results li.row').count()) === before - 1);
-    const chartsBefore = counters.charts;
-    await p.evaluate(() => window.scrollTo(0, 0));
-    await touchDrag(p, 195, 260, 520);
-    await settle(p, 900);
-    check('Pull to refresh reloads the charts', counters.charts > chartsBefore);
+    // Recommendations
+    await p.click('.tab[data-view="recs"]');
+    await p.waitForSelector('#recs .rec');
+    await settle(p, 800);
+    const recs = await p.$$eval('#recs .rec', (cs) => cs.map((c) => ({ id: c.dataset.id, why: c.querySelector('.why').textContent })));
+    const gh = recs.find((r) => r.id === '1007');
+    check('Collaborative filtering suggests what similar listeners love', !!gh && /people with similar taste rated this 9\+/.test(gh.why));
+    check('Every suggestion has a reason and none are already rated', recs.length >= 2 && recs.every((r) => r.why.length > 10 && !['1000', '1001', '1002', '1003', '1004', '1005', '1006'].includes(r.id)));
+    check('Rediscovery picks from favourite artists explain themselves', recs.some((r) => /^Because you rated .+ a \d/.test(r.why)));
+    await p.screenshot({ path: `${out}/12-recommendations.png` });
+    await rateVia(p, '#recs .rec[data-id="1007"] [data-act="rate"]');
+    await closeSheet(p);
+    await p.waitForFunction(() => !document.querySelector('#recs .rec[data-id="1007"]'));
+    check('Suggestions refresh after rating', true);
 
-    // Later
-    await p.click('.tab[data-view="later"]');
-    await settle(p, 700);
-    await p.screenshot({ path: `${out}/11-later.png` });
-
-    // Profile + Taste Profile + share card
+    // Profile
     await p.click('.tab[data-view="profile"]');
-    await settle(p, 1200);
-    check('Taste Profile shows distribution, genres and artist averages', (await p.locator('#taste .dist .col').count()) === 10 && (await p.locator('#taste .hbar').count()) >= 6);
-    await p.screenshot({ path: `${out}/12-profile.png` });
-    await p.screenshot({ path: `${out}/13-profile-full.png`, fullPage: true });
-    await p.click('#share-btn');
+    await settle(p, 600);
+    await p.click('[data-p="edit"]');
+    await p.fill('#edit-form [name=bio]', 'Pop hooks, R&B slow jams, anything with a big chorus.');
+    await p.click('#edit-form button');
+    await settle(p, 600);
+    await p.setInputFiles('#avatar-file', { name: 'me.png', mimeType: 'image/png', buffer: covers[3] });
+    await p.waitForSelector('.profile-card .avatar.xl img');
+    const prof = await p.locator('#profile').innerText();
+    check('Profile shows username, bio, rating count, top 10 and lists', /@maya/.test(prof) && /big chorus/.test(prof) && /Top 10/.test(prof) && /Gym Songs/.test(prof) && /Best Pop Song/.test(prof));
+    const services = await p.$$eval('.services li', (ls) => ls.map((l) => l.innerText.replace(/\s+/g, ' ')));
+    check('Connected services: Apple Music connected; Spotify needs setup; others “Coming soon”', /Apple Music.*Disconnect/i.test(services[0]) && /Spotify.*Not set up/i.test(services[1]) && services.slice(2).every((s) => /Coming soon/i.test(s)));
+    check('No horizontal overflow (Profile)', await noOverflow(p));
+    await p.screenshot({ path: `${out}/13-profile.png` });
+    await p.screenshot({ path: `${out}/14-profile-full.png`, fullPage: true });
+    await p.click('[data-p="share"]');
     await p.waitForSelector('#share-preview img', { timeout: 15000 });
-    await settle(p, 700);
-    const size = await p.evaluate(() => window.__encoreShareBlob && window.__encoreShareBlob.size);
-    check('Share card exports a PNG', size > 50000);
-    await p.screenshot({ path: `${out}/14-share-sheet.png` });
-    const png = await p.evaluate(async () => { const b = window.__encoreShareBlob; const r = new FileReader(); return new Promise((res) => { r.onload = () => res(r.result); r.readAsDataURL(b); }); });
+    check('Share Top 10 image still works', (await p.evaluate(() => window.__encoreShareBlob && window.__encoreShareBlob.size)) > 40000);
+    const png = await p.evaluate(async () => { const r = new FileReader(); return new Promise((res) => { r.onload = () => res(r.result); r.readAsDataURL(window.__encoreShareBlob); }); });
     require('fs').writeFileSync(`${out}/15-share-card.png`, Buffer.from(png.split(',')[1], 'base64'));
     await p.keyboard.press('Escape');
     await settle(p, 1200); // let sync flush
 
+    // ================= Visitor: public profile =================
+    const v = await (await browser.newContext(phone)).newPage();
+    await mockApple(v, covers, {}, { musickit: false });
+    await v.goto(base + '?u=maya');
+    await v.waitForSelector('#view-user.active .profile-card');
+    await settle(v, 800);
+    const pub = await v.locator('#user-profile').innerText();
+    check('Public profile shows public lists only', /Best Pop Song/.test(pub) && !/Gym Songs/.test(pub) && /big chorus/.test(pub));
+    await v.screenshot({ path: `${out}/16-public-profile.png` });
+
+    // ================= Error states =================
+    const e = await (await browser.newContext(phone)).newPage();
+    await mockApple(e, covers, {}, { recentFails: true });
+    await e.goto(base);
+    await e.locator('#recent-state .btn', { hasText: 'Connect Apple Music' }).click();
+    await e.waitForSelector('#recent-state .state.error');
+    check('Recently played shows an error state with Try again', /Try again/.test(await e.locator('#recent-state').innerText()));
+    await e.screenshot({ path: `${out}/17-error-state.png` });
+
     // ================= Desktop =================
-    const ctxD = await browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
-    const d = await ctxD.newPage();
+    const d = await (await browser.newContext({ viewport: { width: 1280, height: 820 }, serviceWorkers: 'block' })).newPage();
     await mockApple(d, covers);
     await d.goto(base);
-    await d.click('#account-btn');
-    await d.fill('input[name=username]', 'maya');
-    await d.fill('input[name=password]', 'correct horse');
-    await d.click('#auth-form button');
-    await d.waitForSelector('#account-btn .avatar');
-    await settle(d, 1200);
+    await d.click('#me-btn');
+    await d.click('[data-switch="login"]');
+    await d.fill('#auth-form [name=login]', 'maya@example.com');
+    await d.fill('#auth-form [name=password]', 'correct horse');
+    await d.click('#auth-form button[type=submit]');
+    await d.waitForSelector('#me-btn.has-avatar');
+    await settle(d, 1000);
+    check('Sign in with email on another device', (await d.locator('#top-shelf .shelf-item').count()) === 8);
     check('No horizontal overflow at 1280px', await noOverflow(d));
-    await d.screenshot({ path: `${out}/20-desktop-discover.png` });
-    await d.keyboard.press('2');
-    await settle(d, 900);
-    check('Keyboard shortcut 2 opens My List', await d.locator('#view-list.active').count() === 1);
-    check('Second device has the synced list', (await d.locator('#ranked li.row').count()) === 8);
-    await d.screenshot({ path: `${out}/21-desktop-list.png` });
-    await d.click('#list-seg [data-seg="albums"]');
-    await settle(d, 500);
-    await d.locator('#ranked li.group').first().locator('.cover').click();
-    await settle(d, 1300);
-    await d.screenshot({ path: `${out}/22-desktop-album.png` });
-    await d.keyboard.press('Escape');
-    await d.keyboard.press('4');
-    await settle(d, 1200);
-    await d.screenshot({ path: `${out}/23-desktop-profile.png` });
+    await d.screenshot({ path: `${out}/20-desktop-home.png` });
     await d.keyboard.press('Control+k');
-    await d.waitForSelector('.palette.in');
-    await d.keyboard.type('neon');
-    await d.waitForSelector('.palette-list .song-opt');
-    await settle(d, 400);
-    check('Command palette finds songs on Apple Music', (await d.locator('.palette-list .song-opt').count()) >= 1);
-    await d.screenshot({ path: `${out}/24-desktop-palette.png` });
-    await d.keyboard.press('Escape');
-    await d.keyboard.press('Control+k');
-    await d.keyboard.type('later'); // typed immediately: the palette must already have focus
+    await d.keyboard.type('edm chart');
     await d.keyboard.press('Enter');
-    await settle(d, 500);
-    check('Palette command navigates (Go to Later)', await d.locator('#view-later.active').count() === 1);
-    // Ranking with the keyboard on desktop
-    await d.keyboard.press('1');
-    await settle(d, 600);
-    await d.fill('#search', 'all');
-    await d.waitForSelector('#results li.row[data-id="1002"]');
-    await d.locator('#results li.row[data-id="1002"] [data-act="open"]').first().click();
-    await d.waitForSelector('[data-detail="rank"]');
-    await d.click('[data-detail="rank"]');
-    await d.click('.react.fine');
-    await settle(d, 500);
-    await d.screenshot({ path: `${out}/25-desktop-compare.png` });
-    await d.keyboard.press('ArrowLeft');
-    await settle(d, 600);
-    check('Arrow keys pick a side while ranking', (await d.locator('.versus').count()) + (await d.locator('[data-done="close"]').count()) >= 1);
-
-    // ================= Visitor: public profile =================
-    const ctx3 = await browser.newContext(phone);
-    const p3 = await ctx3.newPage();
-    await mockApple(p3, covers);
-    await p3.goto(base + '?u=maya');
-    await p3.waitForSelector('#view-user.active #user-list li.row');
-    await settle(p3, 900);
-    check('Public profile visible to others', (await p3.locator('#user-name').innerText()) === 'Maya Chen');
-    await p3.screenshot({ path: `${out}/16-public-profile.png` });
-
-    // ================= Waking-up screen (slow server) =================
-    const ctx4 = await browser.newContext(phone);
-    const p4 = await ctx4.newPage();
-    await mockApple(p4, covers);
-    await p4.route('**/api/me', async (r) => { await new Promise((res) => setTimeout(res, 4500)); r.continue(); });
-    await p4.goto(base);
-    await p4.waitForSelector('#wake:not([hidden])', { timeout: 4000 });
-    await p4.waitForSelector('#results li.row');
-    await settle(p4, 300);
-    check('Waking-up banner shows while the server is slow, app stays usable', (await p4.locator('#results li.row').count()) === 8 && await p4.locator('#wake:not([hidden])').count() === 1);
-    await p4.screenshot({ path: `${out}/17-waking-up.png` });
-    await p4.waitForSelector('#wake', { state: 'hidden', timeout: 8000 });
-    check('Banner clears once the server answers', true);
-
-    // ================= Empty states =================
-    const ctx5 = await browser.newContext(phone);
-    const p5 = await ctx5.newPage();
-    await mockApple(p5, covers);
-    await p5.goto(base + '#list');
-    await settle(p5, 900);
-    check('Empty My List shows a designed empty state', (await p5.locator('#ranked-state .state').count()) === 1);
-    await p5.screenshot({ path: `${out}/18-empty-list.png` });
-    await p5.route('**/api/catalog/search*', (r) => r.fulfill({ status: 502, json: { error: 'x' } }));
-    await p5.route('https://itunes.apple.com/**', (r) => r.abort());
-    await p5.click('.tab[data-view="discover"]');
-    await p5.fill('#search', 'zzz');
-    await p5.waitForSelector('#results-state .state.error', { timeout: 15000 });
-    await settle(p5, 400);
-    check('Search failure shows an error state with retry', (await p5.locator('#results-state [data-state-action]').count()) === 1);
-    await p5.screenshot({ path: `${out}/19-error-state.png` });
+    await d.waitForSelector('#genre-strip [data-genre="edm"].active');
+    await d.waitForSelector('#chart-current li.row');
+    await settle(d, 800);
+    check('Command palette jumps to a genre chart', (await d.locator('#chart-current li.row').first().getAttribute('data-id')) === '1005');
+    await d.screenshot({ path: `${out}/21-desktop-charts.png` });
+    await d.click('.tab[data-view="lists"]');
+    await settle(d, 700);
+    await d.screenshot({ path: `${out}/22-desktop-lists.png` });
+    await d.click('.tab[data-view="profile"]');
+    await settle(d, 700);
+    await d.screenshot({ path: `${out}/23-desktop-profile.png` });
   } finally {
     await browser.close();
     server.close();
@@ -385,4 +404,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { mockApple, makeCovers, rank, songs, rows, taste, settle };
+module.exports = { mockApple, makeCovers, rateVia, songs, rows, taste, settle };

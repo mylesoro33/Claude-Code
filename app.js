@@ -13,6 +13,8 @@
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (v) => (v >= 9.995 ? '10' : v.toFixed(1));
+  /** Shorten long titles for headlines (the full title still shows on the record below). */
+  const short = (t, n = 34) => (String(t).length > n ? String(t).slice(0, n - 1).replace(/[\s([-]+$/, '') + '…' : String(t));
   const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
   // =====================================================================
@@ -1353,7 +1355,7 @@
     const steps = Array.from({ length: session.total }, (_, i) => `<i class="${i < p.steps ? 'done' : ''}"></i>`).join('');
     openSheet(`<div class="step">
         <p class="label kicker">${session.wasRated ? 'Re-rate' : 'Rate'} · question ${p.steps + 1} of up to ${session.total}</p>
-        <h3 class="prompt">Is <em>${esc(s.title)}</em> better or worse than <em>${esc(opp.title)}</em>?</h3>
+        <h3 class="prompt">Is <em>${esc(short(s.title))}</em> better or worse than <em>${esc(short(opp.title))}</em>?</h3>
         <div class="versus">
           <div class="duelist">${vinyl(s, 'min(30vw, 120px)', { px: 300, spin: isPlaying(s.id) })}<div class="t1">${esc(s.title)}</div><div class="t2">${esc(s.artist)}</div><button class="btn quiet sm" data-act="play" data-id="${esc(s.id)}">${I.play}Preview</button></div>
           <div class="vs">vs</div>
