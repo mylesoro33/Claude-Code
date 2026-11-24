@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#060609" />
-  <meta name="description" content="Rank every song on Apple Music, head to head. Your list, your scores, your taste." />
+  <meta name="theme-color" content="#16100c" />
+  <meta name="description" content="Rate every song you love, head to head. Build lists, browse genre charts, and find songs you forgot you loved." />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -13,146 +13,149 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-  <link rel="preload" href="fonts/manrope-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="preload" href="fonts/unbounded-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="fonts/fraunces-latin-full-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="fonts/archivo-latin-standard-normal.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="stage" aria-hidden="true"><i class="glow" id="glow-a"></i><i class="glow" id="glow-b"></i><i class="glow-low"></i></div>
   <div class="grain" aria-hidden="true"></div>
 
-  <nav class="tabbar glass" aria-label="Main">
-    <div class="brand rail-only"><svg class="logo" data-logo viewBox="0 0 32 32" aria-hidden="true"></svg>Encore</div>
+  <nav class="tabbar" aria-label="Main">
+    <div class="wordmark desk-only"><span class="vinyl mini-vinyl" style="--d:26px"><span class="lbl"></span></span>Encore</div>
     <div class="tabs" role="tablist">
-      <span class="tab-indicator" aria-hidden="true"></span>
-      <button class="tab active" data-view="discover" role="tab" aria-selected="true"><span data-icon="search"></span><span>Discover</span></button>
-      <button class="tab" data-view="list" role="tab" aria-selected="false"><span data-icon="podium"></span><span>My List</span></button>
-      <button class="tab" data-view="later" role="tab" aria-selected="false"><span data-icon="bookmark"></span><span>Later</span></button>
+      <button class="tab active" data-view="home" role="tab" aria-selected="true"><span data-icon="home"></span><span>Home</span></button>
+      <button class="tab" data-view="charts" role="tab" aria-selected="false"><span data-icon="chart"></span><span>Charts</span></button>
+      <button class="tab" data-view="lists" role="tab" aria-selected="false"><span data-icon="stack"></span><span>Lists</span></button>
+      <button class="tab" data-view="recs" role="tab" aria-selected="false"><span data-icon="disc"></span><span>Recommendations</span></button>
       <button class="tab" data-view="profile" role="tab" aria-selected="false"><span data-icon="user"></span><span>Profile</span></button>
     </div>
-    <div class="rail-foot rail-only">
-      <button class="palette-hint" id="palette-btn"><span style="display:flex;gap:8px;align-items:center"><span data-icon="command"></span>Search &amp; commands</span><kbd>⌘K</kbd></button>
-      <button class="palette-hint" id="shortcuts-btn"><span style="display:flex;gap:8px;align-items:center"><span data-icon="keyboard"></span>Shortcuts</span><kbd>?</kbd></button>
-    </div>
+    <div class="rail-foot desk-only"><button class="btn quiet sm" id="palette-btn"><span data-icon="search"></span>Search <kbd>⌘K</kbd></button></div>
   </nav>
 
-  <header class="topbar">
-    <div class="brand mobile-only"><svg class="logo" data-logo viewBox="0 0 32 32" aria-hidden="true"></svg>Encore</div>
-    <div class="topbar-right">
+  <header class="masthead">
+    <div class="wordmark mobile-only"><span class="vinyl mini-vinyl" style="--d:26px"><span class="lbl"></span></span>Encore</div>
+    <div class="masthead-right">
       <label class="store" title="Apple Music storefront"><span data-icon="globe"></span><span class="sr-only">Storefront</span><select id="country"></select></label>
-      <button id="account-btn" class="account-btn" hidden>Sign in</button>
+      <button id="me-btn" class="me-btn" hidden>Sign in</button>
     </div>
   </header>
 
-  <div class="ptr glass" id="ptr" aria-hidden="true"><span class="ptr-icon" data-icon="refresh"></span></div>
-  <div class="wake glass" id="wake" role="status" hidden></div>
+  <div class="ptr" id="ptr" aria-hidden="true"><span class="vinyl"><span class="lbl"></span></span></div>
+  <div class="wake" id="wake" role="status" hidden></div>
 
   <main id="main">
-    <!-- DISCOVER -->
-    <section id="view-discover" class="view active" aria-labelledby="h-discover">
-      <div class="view-head"><div><p class="eyebrow">The Apple Music catalog</p><h1 class="display" id="h-discover">Discover</h1></div></div>
-      <div class="searchbar">
-        <div class="search-field">
-          <span data-icon="search"></span>
-          <input id="search" type="search" placeholder="Search any song, artist or album" autocomplete="off" enterkeyhint="search" aria-label="Search Apple Music" />
-          <kbd class="desk-only">/</kbd>
+    <!-- HOME -->
+    <section id="view-home" class="view active" aria-labelledby="h-home">
+      <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">Side A</p><h1 class="display" id="h-home">Home</h1></div>
+      <div class="field"><span data-icon="search"></span><input id="search" type="search" placeholder="Search any song on Apple Music" autocomplete="off" enterkeyhint="search" aria-label="Search Apple Music" /></div>
+      <div id="search-results" hidden>
+        <div class="section-head" style="margin-top:var(--s-5)"><h2 id="results-title">Results</h2></div>
+        <ul id="results" class="rows" aria-live="polite"></ul>
+        <div id="results-state"></div>
+      </div>
+      <div id="home-feed">
+        <div class="section">
+          <div class="section-head"><h2>Recently played</h2><span class="label" id="recent-source"></span></div>
+          <div id="recent-state"></div>
+          <ul id="recent" class="rows"></ul>
         </div>
-        <div class="chips" id="source-chips">
-          <button class="chip active" data-source="charts">Top charts</button>
-          <button class="chip am-only" data-source="recent" hidden>Recently played</button>
-          <button class="chip am-only" data-source="library" hidden>My library</button>
+        <div class="section" id="top-shelf-section">
+          <div class="section-head"><h2>Your top records</h2><button class="btn quiet sm" data-go="lists">See all</button></div>
+          <div class="shelf" id="top-shelf"></div>
+          <div id="top-shelf-state"></div>
+        </div>
+        <div class="section">
+          <div class="section-head"><h2>Trending now</h2><span class="label">Apple Music</span></div>
+          <ul id="trending" class="rows"></ul>
+          <div id="trending-state"></div>
         </div>
       </div>
-      <h2 id="results-title" class="list-title">Top songs right now</h2>
-      <ul id="results" class="rows" aria-live="polite"></ul>
-      <div id="results-state"></div>
     </section>
 
-    <!-- MY LIST -->
-    <section id="view-list" class="view" aria-labelledby="h-list">
-      <div class="view-head"><div><p class="eyebrow">Ranked head to head</p><h1 class="display" id="h-list">My List<span id="list-count" class="count"></span></h1></div></div>
-      <div class="list-tools">
-        <div class="seg" id="list-seg" role="tablist">
-          <span class="seg-ind" aria-hidden="true"></span>
-          <button class="active" data-seg="songs" role="tab">Songs</button>
-          <button data-seg="artists" role="tab">Artists</button>
-          <button data-seg="albums" role="tab">Albums</button>
-        </div>
-        <input id="list-filter" class="input" type="search" placeholder="Filter by title, artist, album, genre" aria-label="Filter your rankings" />
+    <!-- CHARTS -->
+    <section id="view-charts" class="view" aria-labelledby="h-charts">
+      <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">By genre</p><h1 class="display" id="h-charts">Charts</h1></div>
+      <div class="strip" id="genre-strip" role="tablist" aria-label="Genres"></div>
+      <div class="section">
+        <div class="section-head"><h2>Current Chart</h2><span class="source" id="current-source"></span></div>
+        <div id="current-note"></div>
+        <ol id="chart-current" class="rows"></ol>
+        <div id="chart-current-state"></div>
       </div>
-      <div class="chips" id="bucket-chips">
-        <button class="chip active" data-bucket="all">All</button>
-        <button class="chip" data-bucket="liked"><i class="dot" style="background:var(--loved)"></i>Loved</button>
-        <button class="chip" data-bucket="fine"><i class="dot" style="background:var(--fine)"></i>Fine</button>
-        <button class="chip" data-bucket="disliked"><i class="dot" style="background:var(--meh)"></i>Didn't like</button>
+      <div class="section">
+        <div class="section-head"><h2>Most Streamed</h2><span class="source" id="streamed-source"></span></div>
+        <div id="streamed-note"></div>
+        <ol id="chart-streamed" class="rows"></ol>
+        <div id="chart-streamed-state"></div>
       </div>
-      <div class="chips" id="group-sort" hidden>
-        <button class="chip active" data-sort="avg">Highest average</button>
-        <button class="chip" data-sort="count">Most ranked</button>
-      </div>
-      <p class="hint" id="drag-hint" hidden><span data-icon="grip"></span>Drag the handle to move a song up or down. Your scores update as you drop.</p>
-      <ol id="ranked" class="rows"></ol>
-      <div id="ranked-state"></div>
     </section>
 
-    <!-- LATER -->
-    <section id="view-later" class="view" aria-labelledby="h-later">
-      <div class="view-head"><div><p class="eyebrow">Saved for later</p><h1 class="display" id="h-later">Later<span id="later-count" class="count"></span></h1></div></div>
-      <p class="hint" id="later-hint" hidden><span data-icon="sparkle"></span>Swipe right to rank, left to remove.</p>
-      <ul id="later" class="rows"></ul>
-      <div id="later-state"></div>
+    <!-- LISTS -->
+    <section id="view-lists" class="view" aria-labelledby="h-lists">
+      <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">Your collection</p><h1 class="display" id="h-lists">Lists</h1></div>
+      <div class="strip" id="lists-strip" role="tablist">
+        <button class="active" data-pane="ratings" role="tab">My Ratings <span class="muted" id="ratings-count"></span></button>
+        <button data-pane="mine" role="tab">My Lists <span class="muted" id="lists-count"></span></button>
+      </div>
+      <div id="pane-ratings">
+        <div style="display:flex;gap:var(--s-3);flex-wrap:wrap;align-items:center;margin-top:var(--s-4)">
+          <div class="seg" id="ratings-seg" role="tablist">
+            <button class="active" data-seg="songs">Songs</button><button data-seg="artists">Artists</button><button data-seg="albums">Albums</button>
+          </div>
+        </div>
+        <div class="field" style="margin-top:var(--s-3);height:44px"><span data-icon="search"></span><input id="ratings-filter" type="search" placeholder="Filter your ratings" aria-label="Filter your ratings" /></div>
+        <p class="label" id="drag-hint" style="margin:var(--s-3) 0 0" hidden>Drag the handle to move a record. Scores re-spread as you drop.</p>
+        <ol id="ratings" class="rows" style="margin-top:var(--s-2)"></ol>
+        <div id="ratings-state"></div>
+      </div>
+      <div id="pane-mine" hidden>
+        <div class="crates" id="crates"></div>
+      </div>
+    </section>
+
+    <!-- RECOMMENDATIONS -->
+    <section id="view-recs" class="view" aria-labelledby="h-recs">
+      <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">Dig back in</p><h1 class="display" id="h-recs">Recommendations</h1>
+        <p id="recs-intro">Songs you’ve probably heard and would rate highly, picked from listeners with taste like yours. Updated every time you rate.</p></div>
+      <div id="recs-note"></div>
+      <div id="recs"></div>
+      <div id="recs-state"></div>
     </section>
 
     <!-- PROFILE -->
     <section id="view-profile" class="view" aria-labelledby="h-profile">
-      <div class="view-head"><div><p class="eyebrow">You</p><h1 class="display" id="h-profile">Profile</h1></div></div>
-      <div class="card glass" id="account-card"></div>
-      <div class="card glass taste" id="taste"></div>
-      <div class="card glass" id="am-card"></div>
-      <div id="people-box">
-        <p class="section-label">Find people</p>
-        <input id="people-search" class="input" type="search" placeholder="Search Encore users by name" autocomplete="off" aria-label="Search people" />
-        <ul id="people-results" class="people"></ul>
-      </div>
-      <p class="section-label">Your data</p>
-      <div class="row-buttons" style="margin-top:0">
-        <button id="export" class="btn"><span data-icon="download"></span>Export list</button>
-        <label class="btn" tabindex="0">Import list<input id="import" type="file" accept="application/json" hidden /></label>
-        <button id="reset" class="btn danger"><span data-icon="trash"></span>Reset</button>
-      </div>
+      <h1 class="sr-only" id="h-profile">Profile</h1>
+      <div id="profile"></div>
     </section>
 
-    <!-- ANOTHER USER'S PROFILE (stack) -->
-    <section id="view-user" class="view" aria-labelledby="user-name">
-      <button class="back" data-back><span data-icon="back"></span>Back</button>
-      <div class="profile-hero">
-        <div class="avatar big" id="user-avatar"></div>
-        <div style="min-width:0"><h1 class="display" id="user-name"></h1><div class="muted small" id="user-sub"></div><div id="user-match"></div></div>
-      </div>
-      <div class="seg" id="user-seg" role="tablist">
-        <span class="seg-ind" aria-hidden="true"></span>
-        <button class="active" data-seg="songs" role="tab">Songs</button>
-        <button data-seg="artists" role="tab">Artists</button>
-        <button data-seg="albums" role="tab">Albums</button>
-      </div>
-      <ol id="user-list" class="rows" style="margin-top:var(--s-3)"></ol>
-      <div id="user-state"></div>
+    <!-- LIST DETAIL (stack) -->
+    <section id="view-list" class="view" aria-labelledby="list-name">
+      <button class="btn quiet sm" data-back style="margin-top:var(--s-3)"><span data-icon="back"></span>Back</button>
+      <div id="list-detail"></div>
+      <ol id="list-songs" class="rows"></ol>
+      <div id="list-state"></div>
     </section>
 
-    <!-- ALBUM / ARTIST PAGE (stack) -->
+    <!-- ARTIST / ALBUM PAGE (stack) -->
     <section id="view-group" class="view" aria-labelledby="group-name">
-      <button class="back" data-back><span data-icon="back"></span>Back</button>
-      <div class="hero" id="group-hero"></div>
+      <button class="btn quiet sm" data-back style="margin-top:var(--s-3)"><span data-icon="back"></span>Back</button>
+      <div id="group-hero"></div>
       <ol id="group-list" class="rows"></ol>
+    </section>
+
+    <!-- ANOTHER USER (stack) -->
+    <section id="view-user" class="view" aria-labelledby="user-name">
+      <button class="btn quiet sm" data-back style="margin-top:var(--s-3)"><span data-icon="back"></span>Back</button>
+      <div id="user-profile"></div>
     </section>
   </main>
 
-  <div class="mini" id="mini" hidden>
-    <button class="mini-art" id="mini-art" aria-label="Open song"></button>
-    <div class="mini-meta mini-track" id="mini-meta"></div>
-    <canvas id="mini-wave" aria-hidden="true"></canvas>
-    <button class="icon-btn" id="mini-toggle" aria-label="Pause"></button>
-    <button class="icon-btn" id="mini-next" aria-label="Next song"></button>
+  <div class="deck" id="deck" hidden>
+    <button class="platter" id="deck-platter" aria-label="Open the song that’s playing"><span class="vinyl" id="deck-vinyl"><span class="lbl"></span></span><span class="tonearm" id="tonearm" aria-hidden="true"><i></i></span></button>
+    <div class="meta deck-track" id="deck-meta"></div>
+    <button class="icon-btn" id="deck-toggle" aria-label="Pause"></button>
+    <button class="icon-btn" id="deck-next" aria-label="Next song"></button>
+    <div class="groove-progress" aria-hidden="true"><i id="deck-progress"></i></div>
   </div>
 
   <div class="sheet-wrap" id="sheet" hidden>
@@ -165,15 +168,21 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="avatar-file" accept="image/*" hidden />
+  <input type="file" id="import-file" accept="application/json" hidden />
 
+  <script src="config.js"></script>
   <script src="ranking.js"></script>
+  <script src="genres.js"></script>
+  <script src="recommend.js"></script>
   <script src="js/icons.js"></script>
   <script src="js/motion.js"></script>
-  <script src="js/color.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/gestures.js"></script>
   <script src="js/sharecard.js"></script>
   <script src="js/palette.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/services.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
