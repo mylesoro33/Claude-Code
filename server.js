@@ -22,6 +22,9 @@ const { DatabaseSync } = require('node:sqlite');
 const Ranking = require('./ranking.js');
 const { recommend } = require('./recommend.js');
 const { byKey: GENRE } = require('./genres.js');
+const { createBroker, PROVIDERS } = require('./lib/oauth');
+const { createBox } = require('./lib/crypto-box');
+const LOOKUPS = { lastfm: require('./lib/services/lastfm'), spotify: require('./lib/services/spotify'), youtube: require('./lib/services/youtube'), soundcloud: require('./lib/services/soundcloud') };
 
 const ROOT = __dirname;
 const SESSION_DAYS = 60;
@@ -257,8 +260,10 @@ async function mapLimit(items, n, fn) {
 }
 
 // ---------------- App ----------------
-function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data', 'encore.db'), env = process.env } = {}) {
+function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data', 'encore.db'), env = process.env, fetch: fetchImpl = globalThis.fetch, log = console.warn } = {}) {
   const db = openDb(dbPath);
+  const broker = createBroker({ db, env, fetch: fetchImpl, box: createBox(env.TOKEN_ENCRYPTION_KEY, log), log });
+  const svcLimit = limiter(240, 60 * 1000);
   const secure = env.COOKIE_SECURE === '1';
   const authLimit = limiter(20, 15 * 60 * 1000);
   const recLimit = limiter(120, 60 * 1000);
@@ -276,7 +281,7 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
     getState: db.prepare('SELECT data, version, updated_at FROM states WHERE user_id = ?'),
     putState: db.prepare(`INSERT INTO states (user_id, data, version, ranked_count, updated_at) VALUES (?, ?, 1, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, version = states.version + 1, ranked_count = excluded.ranked_count, updated_at = excluded.updated_at`),
-    updateProfile: db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar = ?, is_public = ?, email = ? WHERE id = ?'),
+    updateProfile: db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar = ?, is_public = ?, email = ?, username = ? WHERE id = ?'),
     searchUsers: db.prepare(`SELECT u.username, u.display_name, u.avatar, COALESCE(s.ranked_count, 0) AS ranked
       FROM users u LEFT JOIN states s ON s.user_id = u.id
       WHERE u.is_public = 1 AND (u.username LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
@@ -292,12 +297,30 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
     if (!tok) return null;
     return q.session.get(sha256(tok), Date.now()) || null;
   }
-  function startSession(res, userId) {
+  function addCookie(res, c) {
+    const cur = res.getHeader('Set-Cookie');
+    res.setHeader('Set-Cookie', [...(Array.isArray(cur) ? cur : cur ? [cur] : []), c]);
+  }
+  function startSession(res, userId, req) {
     const tok = crypto.randomBytes(32).toString('base64url');
     const expires = Date.now() + SESSION_DAYS * 864e5;
     q.insertSession.run(sha256(tok), userId, expires);
     q.purgeSessions.run(Date.now());
-    res.setHeader('Set-Cookie', `encore_session=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure ? '; Secure' : ''}`);
+    addCookie(res, `encore_session=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure ? '; Secure' : ''}`);
+    // Services connected as a guest on this device move to the account.
+    const dev = req && parseCookies(req).encore_device;
+    if (dev) broker.adopt('d:' + dev, 'u:' + userId);
+  }
+  /** Who owns service connections: the signed-in user, else this device (a random cookie). */
+  function owner(req, res) {
+    const u = currentUser(req);
+    if (u) return 'u:' + u.id;
+    let dev = parseCookies(req).encore_device;
+    if (!dev || !/^[\w-]{16,64}$/.test(dev)) {
+      dev = crypto.randomBytes(18).toString('base64url');
+      addCookie(res, `encore_device=${dev}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${365 * 86400}${secure ? '; Secure' : ''}`);
+    }
+    return 'd:' + dev;
   }
   function stateFor(userId) {
     const row = q.getState.get(userId);
@@ -325,7 +348,52 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
     if (m !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) return send(res, 415, { error: 'JSON required' });
 
     if (p === '/api/config' && m === 'GET') {
-      return send(res, 200, { appleMusic: !!appleConfig(env), spotifyClientId: env.SPOTIFY_CLIENT_ID || '', lastfm: !!env.LASTFM_API_KEY });
+      return send(res, 200, {
+        appleMusic: !!appleConfig(env), spotifyClientId: env.SPOTIFY_CLIENT_ID || '', lastfm: !!env.LASTFM_API_KEY,
+        services: Object.fromEntries(Object.keys(PROVIDERS).map((k) => [k, broker.configured(k)])),
+        lookups: { lastfm: !!env.LASTFM_API_KEY, spotify: !!(env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET), youtube: !!env.YOUTUBE_API_KEY, soundcloud: !!(env.SOUNDCLOUD_CLIENT_ID && env.SOUNDCLOUD_CLIENT_SECRET) },
+      });
+    }
+
+    // ----- Connected services -----
+    if (p === '/api/connections' && m === 'GET') {
+      return send(res, 200, { connections: broker.list(owner(req, res)), apple: { configured: !!appleConfig(env) } });
+    }
+    const disc = p.match(/^\/api\/connections\/([a-z]+)\/disconnect$/);
+    if (disc && m === 'POST' && PROVIDERS[disc[1]]) { broker.disconnect(owner(req, res), disc[1]); return send(res, 200, { ok: true }); }
+    const sv = p.match(/^\/api\/svc\/([a-z]+)\/(recent|favorite|playlists)(?:\/([^/]+)\/tracks)?$/);
+    if (sv && PROVIDERS[sv[1]]) {
+      if (!svcLimit('svc:' + req.socket.remoteAddress)) return send(res, 429, { error: 'Slow down a little.' });
+      const [, svc, action, playlistId] = sv;
+      const who = owner(req, res);
+      const a = broker.adapter(who, svc);
+      const name = PROVIDERS[svc].name;
+      const songOf = (b) => ({ title: str(b.title, 300), artist: str(b.artist, 300), album: str(b.album, 300) });
+      if (action === 'recent' && m === 'GET') return send(res, 200, { tracks: await a.recent() });
+      if (action === 'favorite' && m === 'POST') {
+        const hit = await a.favorite(songOf(await readJson(req)));
+        return hit ? send(res, 200, { ok: true, matched: hit }) : send(res, 404, { error: `Couldn’t find this song on ${name}.` });
+      }
+      if (action === 'playlists' && !playlistId && m === 'GET') return send(res, 200, { playlists: await a.playlists() });
+      if (action === 'playlists' && !playlistId && m === 'POST') {
+        const nm = str((await readJson(req)).name, 100).trim();
+        if (!nm) return send(res, 400, { error: 'Give the playlist a name.' });
+        return send(res, 201, { playlist: await a.createPlaylist(nm) });
+      }
+      if (action === 'playlists' && playlistId && m === 'POST') {
+        const hit = await a.addToPlaylist(decodeURIComponent(playlistId), songOf(await readJson(req)));
+        return hit ? send(res, 200, { ok: true, matched: hit }) : send(res, 404, { error: `Couldn’t find this song on ${name}.` });
+      }
+    }
+
+    // ----- Find my account (public profiles) -----
+    if (p === '/api/lookup' && m === 'POST') {
+      if (!svcLimit('lookup:' + req.socket.remoteAddress)) return send(res, 429, { error: 'Slow down a little.' });
+      const b = await readJson(req);
+      const mod = LOOKUPS[b.service];
+      const input = str(b.input, 300).trim();
+      if (!mod || !input) return send(res, 400, { error: 'Pick a service and enter a username or profile link.' });
+      return send(res, 200, await mod.lookup(input, { env, fetch: fetchImpl }));
     }
 
     // ----- Accounts -----
@@ -342,7 +410,7 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       if (q.userByName.get(username)) return send(res, 409, { error: 'That username is taken. Try another.', field: 'username' });
       const { hash, salt } = hashPassword(password);
       const r = q.insertUser.run(username, email, str(b.displayName, 40).trim() || username, hash, salt, Date.now());
-      startSession(res, Number(r.lastInsertRowid));
+      startSession(res, Number(r.lastInsertRowid), req);
       return send(res, 201, { user: selfUser(q.userByName.get(username)), ...stateFor(Number(r.lastInsertRowid)) });
     }
 
@@ -357,7 +425,7 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       const login = str(b.login || b.email || b.username, 254).trim();
       const u = login.includes('@') ? q.userByEmail.get(login.toLowerCase()) : q.userByName.get(login);
       if (!u || typeof b.password !== 'string' || !verifyPassword(b.password, u.salt, u.pass_hash)) return send(res, 401, { error: 'That email or password isn’t right.' });
-      startSession(res, u.id);
+      startSession(res, u.id, req);
       return send(res, 200, { user: selfUser(u), ...stateFor(u.id) });
     }
 
@@ -392,10 +460,17 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
         const other = q.userByEmail.get(email);
         if (other && other.id !== u.id) return send(res, 409, { error: 'An account already uses that email.' });
       }
+      let username = u.username;
+      if (typeof b.username === 'string' && b.username.trim() !== u.username) {
+        username = b.username.trim();
+        if (!USERNAME_RE.test(username)) return send(res, 400, { error: 'Usernames are 3–24 letters, numbers, _ or .', field: 'username' });
+        const other = q.userByName.get(username);
+        if (other && other.id !== u.id) return send(res, 409, { error: 'That username is taken. Try another.', field: 'username' });
+      }
       const isPublic = typeof b.isPublic === 'boolean' ? (b.isPublic ? 1 : 0) : u.is_public;
-      q.updateProfile.run(name, bio, avatar, isPublic, email, u.id);
+      q.updateProfile.run(name, bio, avatar, isPublic, email, username, u.id);
       communityCache = null;
-      return send(res, 200, { user: selfUser(q.userByName.get(u.username)) });
+      return send(res, 200, { user: selfUser(q.userByName.get(username)) });
     }
 
     if (p === '/api/state' && m === 'PUT') {
@@ -525,6 +600,19 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
     return send(res, 404, { error: 'Not found' });
   }
 
+  /** OAuth: start → provider consent screen; callback → back into the app (Profile). */
+  async function oauthRoute(req, res, url, svc, step) {
+    const back = (qs) => { res.writeHead(302, { Location: `/?${qs}#profile`, 'Cache-Control': 'no-store' }); res.end(); };
+    try {
+      if (step === 'start') { const loc = broker.start(svc, owner(req, res)); res.writeHead(302, { Location: loc, 'Cache-Control': 'no-store' }); return res.end(); }
+      await broker.callback(svc, Object.fromEntries(url.searchParams));
+      return back(`connected=${svc}`);
+    } catch (e) {
+      if (!e.status) log(e);
+      return back(`svc=${svc}&svc_error=${encodeURIComponent(e.message || 'Connection failed')}`);
+    }
+  }
+
   function serveStatic(req, res, url) {
     const asset = url.pathname.match(ASSET_RE);
     const file = STATIC[url.pathname] || (asset && asset[1]);
@@ -541,11 +629,13 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
+      const au = url.pathname.match(/^\/auth\/([a-z]+)\/(start|callback)$/);
+      if (au && PROVIDERS[au[1]] && req.method === 'GET') return await oauthRoute(req, res, url, au[1], au[2]);
       if (url.pathname.startsWith('/api/')) await api(req, res, url);
       else if (req.method === 'GET' || req.method === 'HEAD') serveStatic(req, res, url);
       else send(res, 405, 'Method not allowed');
     } catch (err) {
-      if (!res.headersSent) send(res, err.status || 500, { error: err.status ? err.message : 'Server error' });
+      if (!res.headersSent) send(res, err.status || 500, { error: err.status ? err.message : 'Server error', ...(err.reauth ? { reauth: true } : {}), ...(err.missing ? { missing: err.missing } : {}) });
       if (!err.status) console.error(err);
     }
   });
@@ -556,6 +646,7 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
 module.exports = { createApp, makeDeveloperToken, appleConfig, cleanState };
 
 if (require.main === module) {
+  require('./lib/env').load(__dirname);
   const port = Number(process.env.PORT) || 3000;
   createApp().listen(port, () => {
     console.log(`Encore running at http://localhost:${port}`);

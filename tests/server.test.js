@@ -124,7 +124,9 @@ test('charts validate the genre; Most Streamed needs a Last.fm key; config repor
   assert.equal((await c('/api/charts/current?genre=polka')).status, 400);
   assert.equal((await c('/api/charts/streamed?genre=edm')).status, 404);
   assert.equal((await c('/api/charts/current?genre=indie')).status, 404, 'no Apple feed for indie');
-  assert.deepEqual((await c('/api/config')).data, { appleMusic: false, spotifyClientId: '', lastfm: false });
+  const cfg = (await c('/api/config')).data;
+  assert.deepEqual([cfg.appleMusic, cfg.spotifyClientId, cfg.lastfm], [false, '', false]);
+  assert.deepEqual(cfg.services, { spotify: false, youtube: false, soundcloud: false, amazon: false });
 }));
 
 test('serves app assets but nothing else; art proxy only accepts Apple artwork', () => withServer({}, async (base) => {
