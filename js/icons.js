@@ -1,0 +1,39 @@
+/* Encore icon set — 24px stroke icons drawn for this app. Usage: Icons.play */
+(function () {
+  const s = (d, extra = '') => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
+  const f = (d) => `<svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${d}</svg>`;
+  window.Icons = {
+    search: s('<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>'),
+    podium: s('<path d="M9 21V9.5A1.5 1.5 0 0 1 10.5 8h3A1.5 1.5 0 0 1 15 9.5V21"/><path d="M15 21v-7.5a1.5 1.5 0 0 1 1.5-1.5h3a1.5 1.5 0 0 1 1.5 1.5V21"/><path d="M3 21v-5.5A1.5 1.5 0 0 1 4.5 14h3A1.5 1.5 0 0 1 9 15.5V21"/><path d="M2 21h20M12 2.8l.8 1.6 1.7.25-1.25 1.2.3 1.7-1.55-.8-1.55.8.3-1.7-1.25-1.2 1.7-.25Z"/>'),
+    bookmark: s('<path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4-6.5 4v-16a1 1 0 0 1 1-1Z"/>'),
+    bookmarkOn: f('<path d="M6.5 3h11A1.5 1.5 0 0 1 19 4.5V21l-7-4.3L5 21V4.5A1.5 1.5 0 0 1 6.5 3Z"/>'),
+    user: s('<circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4 4-6 8-6s7.2 2 8 6"/>'),
+    play: f('<path d="M8 5.6v12.8a1 1 0 0 0 1.52.85l10.2-6.4a1 1 0 0 0 0-1.7L9.52 4.75A1 1 0 0 0 8 5.6Z"/>'),
+    pause: f('<rect x="6.5" y="5" width="4" height="14" rx="1.3"/><rect x="13.5" y="5" width="4" height="14" rx="1.3"/>'),
+    next: f('<path d="M5 6.3v11.4a1 1 0 0 0 1.55.83L14.5 13a1 1 0 0 0 0-1.66L6.55 5.47A1 1 0 0 0 5 6.3Z"/><rect x="16.5" y="5" width="3" height="14" rx="1.2"/>'),
+    prev: f('<path d="M19 6.3v11.4a1 1 0 0 1-1.55.83L9.5 13a1 1 0 0 1 0-1.66l7.95-5.87A1 1 0 0 1 19 6.3Z"/><rect x="4.5" y="5" width="3" height="14" rx="1.2"/>'),
+    plus: s('<path d="M12 5v14M5 12h14"/>', 'stroke-width="2.3"'),
+    check: s('<path d="m5 12.5 4.5 4.5L19 7.5"/>', 'stroke-width="2.3"'),
+    close: s('<path d="M6 6l12 12M18 6 6 18"/>'),
+    back: s('<path d="M15 5l-7 7 7 7"/>', 'stroke-width="2.2"'),
+    chevron: s('<path d="m9 5 7 7-7 7"/>'),
+    grip: s('<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>', 'stroke-width="3"'),
+    share: s('<path d="M12 3v12M7.5 7.5 12 3l4.5 4.5"/><path d="M5 12v6.5A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V12"/>'),
+    download: s('<path d="M12 3v12M7.5 10.5 12 15l4.5-4.5"/><path d="M4 19.5h16"/>'),
+    external: s('<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/>'),
+    trash: s('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/>'),
+    note: s('<path d="M9 18.5V5.5l11-2.5v13"/><circle cx="6.5" cy="18.5" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>'),
+    heart: s('<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20Z"/>'),
+    meh: s('<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14.5h7M9 9.8h.01M15 9.8h.01"/>', 'stroke-width="2"'),
+    thumbDown: s('<path d="M17 4h2.5v10H17zM17 14l-4.3 6.2a1.6 1.6 0 0 1-2.9-1.1l.7-3.6H5.3a2 2 0 0 1-2-2.3l1.1-6.7A2 2 0 0 1 6.4 4.8H17"/>'),
+    command: s('<path d="M9 6.5A2.5 2.5 0 1 0 6.5 9H9V6.5Zm0 0V17.5M15 6.5A2.5 2.5 0 1 1 17.5 9H15V6.5Zm0 0V17.5M9 17.5A2.5 2.5 0 1 1 6.5 15H9v2.5Zm6 0A2.5 2.5 0 1 0 17.5 15H15v2.5ZM9 9h6M9 15h6"/>', 'stroke-width="1.7"'),
+    refresh: s('<path d="M20 11.5A8 8 0 1 0 17.7 17"/><path d="M20 5v6.5h-6.5"/>'),
+    sparkle: s('<path d="M12 3.5 13.9 9l5.6 1.9-5.6 1.9L12 18.5l-1.9-5.7L4.5 11l5.6-1.9Z"/>'),
+    skip: s('<path d="M6 6l12 12M18 6 6 18"/>', 'stroke-width="2.3"'),
+    wave: s('<path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0"/>'),
+    keyboard: s('<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>'),
+    lock: s('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>'),
+    globe: s('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.6 5.4 3.6 8.5s-1.1 5.9-3.6 8.5c-2.5-2.6-3.6-5.4-3.6-8.5S9.5 6.1 12 3.5Z"/>'),
+    signal: s('<path d="M5 18.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0M12 19.5h.01"/>'),
+  };
+})();
