@@ -34,6 +34,16 @@
     keyboard: s('<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/>'),
     lock: s('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>'),
     globe: s('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.6 5.4 3.6 8.5s-1.1 5.9-3.6 8.5c-2.5-2.6-3.6-5.4-3.6-8.5S9.5 6.1 12 3.5Z"/>'),
+    home: s('<path d="M3.5 11 12 4l8.5 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5.5h4V20"/>'),
+    chart: s('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'),
+    stack: s('<rect x="4" y="9" width="16" height="11" rx="1"/><path d="M6.5 6h11M9 3h6"/>'),
+    disc: s('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/><path d="M12 6.2a5.8 5.8 0 0 1 5.8 5.8"/>'),
+    edit: s('<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/>'),
+    camera: s('<path d="M4 8h3l2-2.5h6L17 8h3v11H4Z"/><circle cx="12" cy="13" r="3.5"/>'),
+    minus: s('<path d="M5 12h14"/>', 'stroke-width="2.3"'),
+    up: s('<path d="m6 15 6-6 6 6"/>', 'stroke-width="2.2"'),
+    down: s('<path d="m6 9 6 6 6-6"/>', 'stroke-width="2.2"'),
+    listAdd: s('<path d="M4 6h11M4 12h11M4 18h7M18 15v6M15 18h6"/>'),
     signal: s('<path d="M5 18.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0M12 19.5h.01"/>'),
   };
 })();

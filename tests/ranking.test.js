@@ -3,61 +3,72 @@ const assert = require('node:assert');
 const R = require('../ranking.js');
 
 // Simulate a user whose true taste is a numeric value per song.
-function place(rankings, bucket, id, taste) {
-  const s = R.startPlacement(rankings, bucket, id);
+function place(order, id, taste) {
+  const s = R.startPlacement(order, id);
   let opp;
-  while ((opp = R.nextOpponent(s))) R.answer(s, taste[id] > taste[opp] ? 'new' : 'old');
-  return { rankings: R.commit(rankings, s), steps: s.steps };
+  while ((opp = R.nextOpponent(s))) R.answer(s, taste[id] > taste[opp] ? 'better' : 'worse');
+  return { order: R.commit(order, s), steps: s.steps };
 }
 
-test('binary insertion produces a perfectly sorted list in log2(n) questions', () => {
+test('the first song is a 10 without asking anything', () => {
+  const s = R.startPlacement([], 'a');
+  assert.strictEqual(R.nextOpponent(s), null);
+  const order = R.commit([], s);
+  assert.deepStrictEqual(R.flatten(order), [{ id: 'a', rank: 1, score: 10 }]);
+});
+
+test('better/worse placement sorts perfectly in log2(n) questions', () => {
   const taste = {};
-  let r = R.emptyRankings();
-  const ids = Array.from({ length: 100 }, (_, i) => 's' + i);
+  let order = [];
+  const ids = Array.from({ length: 200 }, (_, i) => 's' + i);
   ids.forEach((id) => (taste[id] = Math.random()));
   for (const id of ids) {
-    const n = r.liked.length;
-    const out = place(r, 'liked', id, taste);
+    const n = order.length;
+    const out = place(order, id, taste);
     assert.ok(out.steps <= R.maxSteps(n), `took ${out.steps} for n=${n}`);
-    r = out.rankings;
+    order = out.order;
   }
-  const sorted = [...ids].sort((a, b) => taste[b] - taste[a]);
-  assert.deepStrictEqual(r.liked, sorted);
+  assert.deepStrictEqual(order, [...ids].sort((a, b) => taste[b] - taste[a]));
 });
 
-test('scores stay inside bucket bands and decrease with rank', () => {
-  let r = { liked: ['a', 'b', 'c'], fine: ['d', 'e'], disliked: ['f'] };
-  const flat = R.flatten(r);
-  assert.deepStrictEqual(flat.map((e) => e.rank), [1, 2, 3, 4, 5, 6]);
-  assert.strictEqual(flat[0].score, 10);
-  assert.strictEqual(flat[2].score, 6.7);
-  for (let i = 1; i < flat.length; i++) assert.ok(flat[i].score <= flat[i - 1].score);
+test('scores re-spread on every add: top is 10, strictly ordered, all within 0–10', () => {
+  let order = [];
+  for (let n = 1; n <= 50; n++) {
+    order = [...order, 'x' + n]; // worst so far
+    const flat = R.flatten(order);
+    assert.strictEqual(flat[0].score, 10);
+    for (let i = 1; i < flat.length; i++) assert.ok(flat[i].score < flat[i - 1].score || flat[i].score === flat[i - 1].score && n > 100);
+    assert.ok(flat.every((e) => e.score > 0 && e.score <= 10));
+  }
+  assert.deepStrictEqual(R.flatten(['a', 'b']).map((e) => e.score), [10, 5]);
+  assert.deepStrictEqual(R.flatten(['a', 'b', 'c', 'd']).map((e) => e.score), [10, 7.5, 5, 2.5]);
 });
 
-test('re-ranking moves a song between buckets and tie places at midpoint', () => {
-  let r = { liked: ['a', 'b', 'c'], fine: [], disliked: [] };
-  const s = R.startPlacement(r, 'fine', 'a');
+test('a new #1 takes the 10 and everyone else shifts down', () => {
+  let order = ['a', 'b'];
+  const s = R.startPlacement(order, 'c');
+  R.answer(s, 'better'); // better than b (mid)
+  R.answer(s, 'better'); // better than a
+  order = R.commit(order, s);
+  assert.deepStrictEqual(R.flatten(order).map((e) => [e.id, e.score]), [['c', 10], ['a', 6.7], ['b', 3.3]]);
+});
+
+test('"about the same" places it right there; re-rating moves a song', () => {
+  const s = R.startPlacement(['a', 'b', 'c'], 'x');
+  R.answer(s, 'same');
   assert.strictEqual(R.nextOpponent(s), null);
-  r = R.commit(r, s);
-  assert.deepStrictEqual(r, { liked: ['b', 'c'], fine: ['a'], disliked: [] });
-  const t = R.startPlacement(r, 'liked', 'x');
-  R.answer(t, 'tie');
-  assert.strictEqual(R.nextOpponent(t), null);
-  assert.deepStrictEqual(R.commit(r, t).liked, ['b', 'x', 'c']);
+  assert.deepStrictEqual(R.commit(['a', 'b', 'c'], s), ['a', 'x', 'b', 'c']);
+  const r = R.startPlacement(['a', 'b', 'c'], 'a'); // re-rate a against b, c
+  assert.deepStrictEqual(r.list, ['b', 'c']);
+  R.answer(r, 'worse'); R.answer(r, 'worse');
+  assert.deepStrictEqual(R.commit(['a', 'b', 'c'], r), ['b', 'c', 'a']);
 });
 
-test('move (drag-to-rank) reorders and re-files across bucket boundaries', () => {
-  const r = { liked: ['a', 'b', 'c'], fine: ['d', 'e'], disliked: ['f'] };
-  // c → top
-  assert.deepStrictEqual(R.move(r, 'c', 0).rankings, { liked: ['c', 'a', 'b'], fine: ['d', 'e'], disliked: ['f'] });
-  // a → between d and e (flat index 3 after removal: b,c,d | e,f) becomes "fine"
-  const m = R.move(r, 'a', 3);
-  assert.strictEqual(m.bucket, 'fine');
-  assert.deepStrictEqual(m.rankings, { liked: ['b', 'c'], fine: ['d', 'a', 'e'], disliked: ['f'] });
-  // f → very top joins "liked"
-  assert.deepStrictEqual(R.move(r, 'f', 0).rankings.liked, ['f', 'a', 'b', 'c']);
-  // dragging to the very end joins the last song's bucket
-  assert.deepStrictEqual(R.move(r, 'a', 99).rankings.disliked, ['f', 'a']);
-  // unknown id is a no-op
-  assert.strictEqual(R.move(r, 'zz', 0).rankings, r);
+test('drag move, remove and legacy bucket migration', () => {
+  assert.deepStrictEqual(R.move(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b']);
+  assert.deepStrictEqual(R.move(['a', 'b', 'c'], 'a', 99), ['b', 'c', 'a']);
+  assert.deepStrictEqual(R.move(['a'], 'zz', 0), ['a']);
+  assert.deepStrictEqual(R.remove(['a', 'b'], 'a'), ['b']);
+  assert.deepStrictEqual(R.fromLegacy({ liked: ['a', 'b'], fine: ['c'], disliked: ['d', 'a'] }), ['a', 'b', 'c', 'd']);
+  assert.deepStrictEqual(R.fromLegacy(null), []);
 });

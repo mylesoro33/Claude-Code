@@ -29,7 +29,7 @@ jobs:
       - name: Collect the site files
         run: |
           mkdir _site
-          cp index.html app.js ranking.js styles.css sw.js manifest.webmanifest icon.svg _site/
+          cp index.html app.js ranking.js genres.js recommend.js config.js styles.css sw.js manifest.webmanifest icon.svg _site/
           cp -r js fonts icons _site/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
