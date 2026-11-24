@@ -328,7 +328,8 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       let target;
       try { target = new URL(url.searchParams.get('u') || ''); } catch { return send(res, 400, { error: 'Bad URL' }); }
       if (target.protocol !== 'https:' || !ART_HOST_RE.test(target.hostname)) return send(res, 400, { error: 'Only Apple artwork is allowed' });
-      const up = await fetch(target, { headers: { 'User-Agent': 'Encore/2.0' } });
+      let up;
+      try { up = await fetch(target, { headers: { 'User-Agent': 'Encore/2.0' } }); } catch { return send(res, 502, { error: 'Artwork unavailable' }); }
       const type = up.headers.get('content-type') || '';
       if (!up.ok || !/^image\/(jpeg|png|webp)/.test(type)) return send(res, 502, { error: 'Artwork unavailable' });
       const buf = Buffer.from(await up.arrayBuffer());
