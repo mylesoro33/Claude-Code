@@ -658,7 +658,7 @@
     const el = $('#account-card');
     $('#people-box').hidden = !sync.server;
     if (!sync.server) {
-      el.innerHTML = `<h3>${I.user}Your list lives on this device</h3><p>Accounts, syncing across devices and shareable profiles need the Encore server. Run <code>npm start</code> to turn them on.</p>`;
+      el.innerHTML = `<h3>${I.user}Your list lives on this device</h3><p>Everything you rank is saved in this browser. Use <b>Export list</b> below to back it up or move it to another device.</p>`;
       return;
     }
     if (!sync.user) {
@@ -903,6 +903,7 @@
   }
   function renderAmCard() {
     const el = $('#am-card');
+    el.hidden = !sync.server; // linking needs the server's MusicKit token
     if (amConnected()) {
       el.innerHTML = `<div class="card-head"><h3><span class="badge-am">${I.note}</span>Apple Music</h3><span class="match">${I.check}Connected</span></div>
         <p>Rank from your recently played songs and library in Discover, hear full songs with your subscription, and save your top songs as a playlist.</p>

@@ -76,7 +76,14 @@ npm start            # http://localhost:3000
 Accounts are stored in `data/encore.db` (set `DATABASE_PATH` to move it, and set `COOKIE_SECURE=1` behind HTTPS).
 Deploy to any host that runs Node with a persistent disk (Render, Fly.io, Railway, a VPS).
 
-The static files still work on their own (for example on GitHub Pages) in guest-only mode, without accounts or Apple Music linking.
+### GitHub Pages (free, no server)
+`.github/workflows/pages.yml` publishes the app to GitHub Pages on every push to `main`.
+Turn it on once under the repo's **Settings → Pages → Source: GitHub Actions**. The site is then at
+`https://<user>.github.io/<repo>/`. (Pages on a private repo needs a paid GitHub plan.)
+
+Pages only hosts files, so the app runs in guest mode there. Search, ranking, previews, Taste Profile,
+sharing and offline use all work, and your list is saved in the browser (use Export to back it up).
+Accounts, syncing across devices, public profiles and Apple Music linking need the Node server above.
 
 ### Turning on "Connect Apple Music"
 Apple requires a MusicKit developer token, which needs an Apple Developer Program membership:
