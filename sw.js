@@ -5,13 +5,13 @@
  *  - Album art from Apple's CDN: cached as you browse (capped).
  *  - /api/*: always network (accounts, sync, catalog proxy).
  */
-const VERSION = 'encore-v5';
+const VERSION = 'encore-v6';
 const SHELL = `${VERSION}-shell`;
 const ART = `${VERSION}-art`;
 const ART_MAX = 400;
 const SHELL_FILES = [
   './', 'index.html', 'styles.css', 'config.js', 'ranking.js', 'genres.js', 'recommend.js', 'app.js',
-  'js/icons.js', 'js/motion.js', 'js/audio.js', 'js/gestures.js', 'js/sharecard.js', 'js/palette.js', 'js/charts.js', 'js/services.js',
+  'js/icons.js', 'js/motion.js', 'js/audio.js', 'js/gestures.js', 'js/sharecard.js', 'js/palette.js', 'js/charts.js',
   'fonts/fraunces-latin-full-normal.woff2', 'fonts/archivo-latin-standard-normal.woff2',
   'icon.svg', 'icons/icon-192.png', 'icons/apple-touch-icon.png', 'manifest.webmanifest',
 ];

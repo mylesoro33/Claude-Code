@@ -1,6 +1,6 @@
 /*
  * ⌘K / Ctrl+K command palette: jump anywhere, run actions, and search the
- * Apple Music catalog without leaving the keyboard.
+ * song catalog without leaving the keyboard.
  */
 (function () {
   let cfg = null, root, input, listEl, items = [], sel = 0, open = false, seq = 0, timer = 0, lastFocus = null;
@@ -71,7 +71,7 @@
     let html = '';
     const cmds = items.filter((x) => x.type === 'cmd');
     if (cmds.length) html += '<li class="palette-head">Actions</li>' + cmds.map((c) => `<li data-i="${items.indexOf(c)}" role="option">${Icons[c.icon] || ''}<span class="pl">${esc(c.label)}</span>${c.hint ? `<kbd>${esc(c.hint)}</kbd>` : ''}</li>`).join('');
-    if (songs.length || loading) html += '<li class="palette-head">Songs on Apple Music</li>';
+    if (songs.length || loading) html += '<li class="palette-head">Songs</li>';
     if (loading && !songs.length) html += '<li class="palette-skel"><i></i><i></i></li><li class="palette-skel"><i></i><i></i></li>';
     html += items.filter((x) => x.type === 'song').map((s) => {
       const song = s.song;

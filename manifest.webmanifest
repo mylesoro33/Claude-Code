@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Encore — Rank Your Songs",
   "short_name": "Encore",
-  "description": "Rank every song on Apple Music, head to head.",
+  "description": "Rate every song you love, head to head.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

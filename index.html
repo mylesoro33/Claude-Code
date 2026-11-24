@@ -25,8 +25,9 @@
     <div class="tabs" role="tablist">
       <button class="tab active" data-view="home" role="tab" aria-selected="true"><span data-icon="home"></span><span>Home</span></button>
       <button class="tab" data-view="charts" role="tab" aria-selected="false"><span data-icon="chart"></span><span>Charts</span></button>
+      <button class="tab" data-view="streamed" role="tab" aria-selected="false"><span data-icon="wave"></span><span>Most Streamed</span></button>
       <button class="tab" data-view="lists" role="tab" aria-selected="false"><span data-icon="stack"></span><span>Lists</span></button>
-      <button class="tab" data-view="recs" role="tab" aria-selected="false"><span data-icon="disc"></span><span>Recommendations</span></button>
+      <button class="tab" data-view="recs" role="tab" aria-selected="false"><span data-icon="disc"></span><span>Recommen&shy;dations</span></button>
       <button class="tab" data-view="profile" role="tab" aria-selected="false"><span data-icon="user"></span><span>Profile</span></button>
     </div>
   </nav>
@@ -34,7 +35,7 @@
   <header class="masthead">
     <div class="wordmark mobile-only"><span class="vinyl mini-vinyl" style="--d:26px"><span class="lbl"></span></span>Encore</div>
     <div class="masthead-right">
-      <label class="store" title="Apple Music storefront"><span data-icon="globe"></span><span class="sr-only">Storefront</span><select id="country"></select></label>
+      <label class="store" title="Country for search and charts"><span data-icon="globe"></span><span class="sr-only">Country</span><select id="country"></select></label>
       <button id="me-btn" class="me-btn" hidden>Sign in</button>
     </div>
   </header>
@@ -46,25 +47,20 @@
     <!-- HOME -->
     <section id="view-home" class="view active" aria-labelledby="h-home">
       <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">Side A</p><h1 class="display" id="h-home">Home</h1></div>
-      <div class="field"><span data-icon="search"></span><input id="search" type="search" placeholder="Search any song on Apple Music" autocomplete="off" enterkeyhint="search" aria-label="Search Apple Music" /></div>
+      <div class="field"><span data-icon="search"></span><input id="search" type="search" placeholder="Search songs, artists, or albums" autocomplete="off" enterkeyhint="search" aria-label="Search songs, artists, or albums" /></div>
       <div id="search-results" hidden>
         <div class="section-head" style="margin-top:var(--s-5)"><h2 id="results-title">Results</h2></div>
         <ul id="results" class="rows" aria-live="polite"></ul>
         <div id="results-state"></div>
       </div>
       <div id="home-feed">
-        <div class="section">
-          <div class="section-head"><h2>Recently played</h2><span class="label" id="recent-source"></span></div>
-          <div id="recent-state"></div>
-          <ul id="recent" class="rows"></ul>
-        </div>
         <div class="section" id="top-shelf-section">
           <div class="section-head"><h2>Your top records</h2><button class="btn quiet sm" data-go="lists">See all</button></div>
           <div class="shelf" id="top-shelf"></div>
           <div id="top-shelf-state"></div>
         </div>
         <div class="section">
-          <div class="section-head"><h2>Trending now</h2><span class="label">Apple Music</span></div>
+          <div class="section-head"><h2>Trending now</h2></div>
           <ul id="trending" class="rows"></ul>
           <div id="trending-state"></div>
         </div>
@@ -73,23 +69,29 @@
 
     <!-- CHARTS -->
     <section id="view-charts" class="view" aria-labelledby="h-charts">
-      <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">By genre</p><h1 class="display" id="h-charts">Charts</h1></div>
-      <div class="strip" id="genre-strip" role="tablist" aria-label="Genres"></div>
+      <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">This week, by genre</p><h1 class="display" id="h-charts">Charts</h1></div>
+      <div class="strip genre-strip" id="genre-strip" data-kind="current" role="tablist" aria-label="Genres"></div>
       <div class="section">
-        <div class="section-head"><h2>Current Chart</h2><span class="source" id="current-source"></span></div>
+        <div class="section-head"><h2>Current rankings</h2><span class="source" id="current-source"></span></div>
         <div id="current-note"></div>
         <ol id="chart-current" class="rows"></ol>
         <div id="chart-current-state"></div>
       </div>
-      <div class="section">
-        <div class="section-head"><h2>Most Streamed</h2><span class="source" id="streamed-source"></span></div>
-        <div id="streamed-note"></div>
-        <ol id="chart-streamed" class="rows"></ol>
-        <div id="chart-streamed-state"></div>
-      </div>
       <div class="section" id="albums-section" hidden>
         <div class="section-head"><h2>Billboard 200</h2><span class="source" id="albums-source"></span></div>
         <ol id="chart-albums" class="rows"></ol>
+      </div>
+    </section>
+
+    <!-- MOST STREAMED -->
+    <section id="view-streamed" class="view" aria-labelledby="h-streamed">
+      <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">All-time, by genre</p><h1 class="display" id="h-streamed">Most Streamed</h1></div>
+      <div class="strip genre-strip" id="streamed-strip" data-kind="streamed" role="tablist" aria-label="Genres"></div>
+      <div class="section">
+        <div class="section-head"><h2>Top streamed songs</h2><span class="source" id="streamed-source"></span></div>
+        <div id="streamed-note"></div>
+        <ol id="chart-streamed" class="rows"></ol>
+        <div id="chart-streamed-state"></div>
       </div>
     </section>
 
@@ -120,7 +122,8 @@
     <!-- RECOMMENDATIONS -->
     <section id="view-recs" class="view" aria-labelledby="h-recs">
       <div class="page-head"><i class="groove-art" aria-hidden="true"></i><p class="label accent">Dig back in</p><h1 class="display" id="h-recs">Recommendations</h1>
-        <p id="recs-intro">Songs you’ve probably heard and would rate highly, picked from listeners with taste like yours. Updated every time you rate.</p></div>
+        <p id="recs-intro">Songs you’ve probably heard and would rate highly, picked from listeners with taste like yours. They update every time you rate.</p>
+        <div class="recs-bar"><button class="btn sm" id="recs-refresh"><span data-icon="refresh"></span>Refresh</button><p class="recs-updated" id="recs-updated" role="status" aria-live="polite"></p></div></div>
       <div id="recs-note"></div>
       <div id="recs"></div>
       <div id="recs-state"></div>
@@ -157,7 +160,6 @@
   <div class="deck" id="deck" hidden>
     <button class="platter" id="deck-platter" aria-label="Open the song that’s playing"><span class="vinyl" id="deck-vinyl"><span class="lbl"></span></span><span class="tonearm" id="tonearm" aria-hidden="true"><i></i></span></button>
     <div class="meta deck-track" id="deck-meta"></div>
-    <button class="icon-btn" id="deck-fav" aria-label="Favorite" aria-pressed="false"></button>
     <button class="icon-btn" id="deck-toggle" aria-label="Pause"></button>
     <button class="icon-btn" id="deck-next" aria-label="Next song"></button>
     <div class="groove-progress" aria-hidden="true"><i id="deck-progress"></i></div>
@@ -187,7 +189,6 @@
   <script src="js/sharecard.js"></script>
   <script src="js/palette.js"></script>
   <script src="js/charts.js"></script>
-  <script src="js/services.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

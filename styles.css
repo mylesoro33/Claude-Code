@@ -184,11 +184,14 @@ body.scrolled .masthead { border-bottom-color: var(--line); }
   position: fixed; z-index: 40; left: 0; right: 0; bottom: 0; padding-bottom: var(--safe-b);
   background: var(--ink-1); border-top: 1px solid var(--line-2);
 }
-.tabs { position: relative; display: grid; grid-template-columns: 1fr 1fr 1fr 1.55fr 1fr; height: var(--tab-h); padding: 0 max(4px, env(safe-area-inset-left, 0px)) 0 max(4px, env(safe-area-inset-right, 0px)); max-width: 640px; margin: 0 auto; }
+.tabs { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); height: var(--tab-h); padding: 0 max(4px, env(safe-area-inset-left, 0px)) 0 max(4px, env(safe-area-inset-right, 0px)); max-width: 640px; margin: 0 auto; }
 .tab {
   position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: var(--tap);
-  color: var(--cream-3); font-stretch: 72%; font-size: 10px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; transition: color var(--dur-2);
+  color: var(--cream-3); font-stretch: 72%; font-size: 10px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; transition: color var(--dur-2);
 }
+/* Six tabs on a phone: long labels ("Most Streamed", "Recommendations") wrap onto two lines. */
+.tab > span:last-child { text-align: center; line-height: 1.1; overflow-wrap: anywhere; hyphens: manual; }
+@media (max-width: 420px) { .tab { font-size: 9px; letter-spacing: .03em; gap: 3px; padding: 0 1px; } }
 .tab::before { /* the needle mark */
   content: ''; position: absolute; top: 0; left: 22%; right: 22%; height: 3px; background: var(--accent);
   transform: scaleX(0); transform-origin: center; transition: transform var(--dur-3) var(--ease-spring);
@@ -258,17 +261,23 @@ textarea.input { resize: vertical; min-height: 84px; line-height: 1.4; }
 .btn[disabled] { opacity: .5; pointer-events: none; }
 .btn-row { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-4); }
 .btn-row.center { justify-content: center; }
-.icon-btn.on, .btn.fav-on { color: var(--accent); }
-.btn.fav-on { border-color: var(--accent); }
 .chart-meta { color: var(--cream-2); font-variant-numeric: tabular-nums; }
-.find-account { margin-top: var(--s-5); padding: var(--s-4); border: 1.5px dashed var(--line-2); border-radius: var(--r-ui); }
-.find-account h3 { margin: 0; font-family: var(--display); font-weight: 800; font-size: var(--fs-lg); font-variation-settings: 'SOFT' 100; }
-.find-account p { margin: 4px 0 var(--s-3); }
-.lookup-row { display: grid; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) auto; gap: var(--s-2); align-items: center; }
-.lookup-row select.input { min-height: 46px; padding-right: 4px; }
-@media (max-width: 420px) { .lookup-row { grid-template-columns: 1fr auto; } .lookup-row select { grid-column: 1 / -1; } }
-.pick-lists li.busy { opacity: .5; pointer-events: none; }
-code { font-size: .85em; padding: 1px 4px; border-radius: 3px; background: var(--ink-2); color: var(--cream); }
+.center-owned { justify-content: center; }
+/* Recommendations: Refresh, and a pulse when the picks change */
+.recs-bar { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; margin-top: var(--s-4); }
+.recs-updated { margin: 0; min-height: 1.4em; font-size: var(--fs-xs); font-weight: 700; color: var(--accent); }
+.recs-updated.pulse { animation: rec-pulse 1.6s ease-out; }
+@keyframes rec-pulse { 0% { opacity: 0; transform: translateY(4px); } 15% { opacity: 1; transform: none; } 30% { text-shadow: 0 0 14px var(--accent); } 100% { text-shadow: none; } }
+#recs-refresh.busy .ico { animation: spin 0.9s linear infinite; }
+#recs { transition: opacity var(--dur-2, .2s); }
+#recs.updating { opacity: .55; }
+.rec.rec-new { animation: rec-new 2.2s ease-out; }
+@keyframes rec-new { 0% { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 3px 0 0 var(--accent); } 100% { background: transparent; box-shadow: inset 3px 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .rec.rec-new, .recs-updated.pulse, #recs-refresh.busy .ico { animation: none; } }
+/* Profile photo: live preview of the crop */
+.avatar.lg { width: 64px; height: 64px; }
+.avatar canvas { width: 100%; height: 100%; display: block; }
+.crop-preview { display: flex; align-items: center; justify-content: center; gap: var(--s-3); margin: var(--s-4) auto 0; }
 .cropper { position: relative; width: 280px; height: 280px; margin: var(--s-3) auto; border-radius: var(--r-ui); overflow: hidden; touch-action: none; cursor: grab; }
 .cropper canvas { display: block; }
 .crop-ring { position: absolute; inset: 0; pointer-events: none; border-radius: 50%; box-shadow: 0 0 0 999px rgba(8, 5, 3, .6), inset 0 0 0 2px var(--accent); }
@@ -381,11 +390,6 @@ code { font-size: .85em; padding: 1px 4px; border-radius: 3px; background: var(-
 .counts { display: flex; gap: var(--s-6); justify-content: center; margin-top: var(--s-2); }
 .counts div { display: grid; }
 .counts b { font-family: var(--display); font-weight: 850; font-size: var(--fs-xl); line-height: 1; font-variation-settings: 'SOFT' 100; font-variant-numeric: tabular-nums; }
-.services { list-style: none; padding: 0; margin: 0; }
-.services li { display: flex; align-items: center; gap: var(--s-3); min-height: 64px; border-bottom: 1px solid var(--line); }
-.services li > div { flex: 1; min-width: 0; }
-.svc-mark { width: 36px; height: 36px; flex-shrink: 0; display: grid; place-items: center; border: 1.5px solid var(--line-2); border-radius: var(--r-ui); font-family: var(--display); font-weight: 900; font-size: var(--fs-md); }
-.svc-mark.on { border-color: var(--accent); color: var(--accent); }
 .people { list-style: none; padding: 0; margin: var(--s-2) 0 0; }
 .people li { display: flex; gap: var(--s-3); align-items: center; min-height: 60px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .people li > div { flex: 1; min-width: 0; }
@@ -400,7 +404,7 @@ code { font-size: .85em; padding: 1px 4px; border-radius: 3px; background: var(-
 /* ---------- Turntable deck (now playing) ---------- */
 .deck {
   position: fixed; z-index: 39; left: 0; right: 0; bottom: calc(var(--tab-h) + var(--safe-b)); height: var(--deck-h);
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: var(--s-2);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--s-3);
   padding: 0 var(--gutter-r) 0 var(--gutter-l); background: #261b14; border-top: 1px solid var(--line-2); touch-action: pan-y;
   animation: deck-in var(--dur-3) var(--ease) both;
 }

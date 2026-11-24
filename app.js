@@ -8,7 +8,6 @@
   const CFG = window.ENCORE_CONFIG || {};
   const GUEST_KEY = 'encore.v1';
   const LAST_USER = 'encore.lastUser';
-  const AM_FLAG = 'encore.am';
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,8 +19,8 @@
   // =====================================================================
   // State + persistence (guest = this browser; account = synced to server)
   // =====================================================================
-  const defaultState = () => ({ songs: {}, order: [], lists: [], favorites: [], connections: {}, ratedAt: {}, country: guessCountry() });
-  const sync = { server: false, awake: false, user: null, version: 0, dirty: false, timer: null, status: '', config: null };
+  const defaultState = () => ({ songs: {}, order: [], lists: [], ratedAt: {}, country: guessCountry() });
+  const sync = { server: false, awake: false, user: null, version: 0, dirty: false, timer: null, status: '' };
   let state = defaultState();
 
   function guessCountry() {
@@ -32,15 +31,14 @@
   function readJSON(key) { try { return JSON.parse(localStorage.getItem(key)); } catch (_) { return null; } }
   function writeJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (_) { /* full / private mode */ } }
   function removeKey(key) { try { localStorage.removeItem(key); } catch (_) { /* ignore */ } }
-  /** Fill defaults and migrate older saved data (loved/fine/didn't-like buckets, Later list). */
+  /** Fill defaults and migrate older saved data (loved/fine/didn't-like buckets, Later list, old service connections). */
   function normalize(s) {
     const out = Object.assign(defaultState(), s || {});
     if (!Array.isArray(out.order)) out.order = R.fromLegacy(out.rankings);
     if (!out.ratedAt || !Object.keys(out.ratedAt).length) out.ratedAt = out.rankedAt || {};
     delete out.rankings; delete out.later; delete out.rankedAt;
+    delete out.favorites; delete out.connections; delete out.lookup;
     out.lists = Array.isArray(out.lists) ? out.lists : [];
-    out.favorites = Array.isArray(out.favorites) ? out.favorites : [];
-    out.connections = out.connections && typeof out.connections === 'object' ? out.connections : {};
     return out;
   }
   const rated = () => state.order.length;
@@ -124,7 +122,7 @@
   }
 
   // =====================================================================
-  // Apple Music catalog (iTunes Search API) with an instant cache
+  // Song catalog: iTunes Search API (no key, no login) with an instant cache
   // =====================================================================
   const memo = new Map();
   const MEMO_TTL = 10 * 60 * 1000;
@@ -205,7 +203,7 @@
     if (songs.length) return songs;
     return feed.map((r) => ({ id: String(r.id), title: r.name, artist: r.artistName, album: '', art: r.artworkUrl100 || '', preview: '', url: r.url || '', genre: (r.genres?.[0]?.name) || '', year: '', explicit: false }));
   }
-  /** Match "title by artist" (from Spotify, Last.fm or a sample list) to an Apple Music song. Cached. */
+  /** Match a chart row ("title by artist") to a catalog song with artwork and a preview. Cached. */
   const RESOLVE_KEY = 'encore.resolved';
   const resolved = readJSON(RESOLVE_KEY) || {};
   async function resolveTrack(title, artist) {
@@ -222,14 +220,6 @@
       writeJSON(RESOLVE_KEY, resolved);
     }
     return hit || null;
-  }
-  async function mapLimit(items, n, fn) {
-    const out = new Array(items.length);
-    let i = 0;
-    await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
-      while (i < items.length) { const k = i++; try { out[k] = await fn(items[k], k); } catch (_) { out[k] = null; } }
-    }));
-    return out;
   }
   let refreshing = false;
   async function refreshSongMeta() {
@@ -378,10 +368,10 @@
     });
   }
   const mineData = () => ({ order: state.order, songs: state.songs, mine: true });
-  const lookupAny = (id) => state.songs[id] || lastResults.find((s) => s.id === id) || trending.find((s) => s.id === id) || recentSongs.find((s) => s.id === id) || chartSongs.find((s) => s.id === id) || recSongs.find((s) => s.id === id) || (viewing && viewing.songs[id]) || null;
+  const lookupAny = (id) => state.songs[id] || lastResults.find((s) => s.id === id) || trending.find((s) => s.id === id) || chartSongs.find((s) => s.id === id) || recSongs.find((s) => s.id === id) || (viewing && viewing.songs[id]) || null;
 
   // =====================================================================
-  // HOME: search, recently played, top records, trending
+  // HOME: search, top records, trending
   // =====================================================================
   let lastResults = [];
   let searchTimer = null;
@@ -406,13 +396,13 @@
     } catch (_) {
       if (seq !== searchSeq) return;
       $('#results').innerHTML = '';
-      stateBlock($('#results-state'), { error: true, title: 'Can’t reach Apple Music', body: 'Check your connection, then try again.', actions: [{ label: 'Try again', run: () => runSearch({ fresh: true }) }] });
+      stateBlock($('#results-state'), { error: true, title: 'Search isn’t answering', body: 'Check your connection, then try again.', actions: [{ label: 'Try again', run: () => runSearch({ fresh: true }) }] });
     }
   }
   function showResults(songs, term) {
     lastResults = songs.filter((s) => !skipped.has(s.id));
     renderResults();
-    stateBlock($('#results-state'), lastResults.length ? {} : { title: 'No songs found', body: `Nothing on Apple Music matches “${esc(term)}”. Try the artist’s name.` });
+    stateBlock($('#results-state'), lastResults.length ? {} : { title: 'No songs found', body: `Nothing matches “${esc(term)}”. Try a song, artist, or album name.` });
   }
   function renderResults() {
     const ul = $('#results');
@@ -435,7 +425,7 @@
       stateBlock($('#trending-state'));
     } catch (_) {
       ul.innerHTML = '';
-      stateBlock($('#trending-state'), { error: true, title: 'Charts didn’t load', body: 'Apple Music didn’t answer. Try again in a moment.', actions: [{ label: 'Try again', run: () => loadTrending({ fresh: true }) }] });
+      stateBlock($('#trending-state'), { error: true, title: 'Trending didn’t load', body: 'Try again in a moment.', actions: [{ label: 'Try again', run: () => loadTrending({ fresh: true }) }] });
     }
   }
   function renderTrending() {
@@ -456,95 +446,36 @@
   }
   $('#top-shelf').addEventListener('click', (e) => { const b = e.target.closest('[data-id]'); if (b) openDetail(state.songs[b.dataset.id]); });
 
-  // ----- Recently played: Apple Music, every connected service, and "Find my account" -----
-  let recentSongs = [];
-  let recentStatus = 'idle'; // idle | loading | ready | error
-  let recentError = '';
-  let recentFrom = [];
-  let connections = [];      // server-side services: [{ service, name, configured, connected, account, waiting, missing }]
-  let foundSongs = readJSON('encore.foundSongs') || [];
-  const amPossible = () => !!(CFG.musickitDeveloperToken || (sync.config && sync.config.appleMusic));
-  const spotifyClientId = () => CFG.spotifyClientId || '';
-  const linked = () => connections.filter((c) => c.connected && !c.waiting);
-  const anyHistory = () => amConnected() || linked().length > 0 || (!sync.server && Services.Spotify.connected()) || foundSongs.length > 0;
-  async function loadConnections() {
-    if (!sync.server) return;
-    const r = await api('/api/connections').catch(() => null);
-    if (r && r.ok) connections = r.data.connections || [];
-  }
-  const svcName = (k) => (k === 'apple' ? 'Apple Music' : k === 'lastfm' ? 'Last.fm' : (connections.find((c) => c.service === k) || Services.LIST.find((s) => s.key === k) || { name: k }).name);
-  async function toSongs(tracks, n = 15) {
-    return (await mapLimit(tracks.slice(0, n), 4, (t) => resolveTrack(t.title, t.artist))).filter(Boolean);
-  }
-  async function loadRecent() {
-    if (!anyHistory()) { recentStatus = 'idle'; renderRecent(); return; }
-    recentStatus = 'loading'; renderRecent();
-    const out = [];
-    const errors = [];
-    recentFrom = [];
-    if (amConnected()) { try { out.push(...(await amRecent())); recentFrom.push('Apple Music'); } catch (_) { errors.push('Apple Music'); } }
-    await Promise.all(linked().map(async (c) => {
-      const r = await api(`/api/svc/${c.service}/recent`, { timeout: 20000 }).catch(() => ({ ok: false, data: {} }));
-      if (r.ok) { out.push(...(await toSongs(r.data.tracks || []))); recentFrom.push(c.name); }
-      else { errors.push(c.name); if (r.data.reauth) needsReconnect(c.service); }
-    }));
-    if (!sync.server && Services.Spotify.connected()) {
-      try { out.push(...(await toSongs(await Services.Spotify.recent()))); recentFrom.push('Spotify'); } catch (_) { errors.push('Spotify'); }
-    }
-    if (foundSongs.length) { out.push(...foundSongs); recentFrom.push(state.lookup ? `${state.lookup.account} on ${svcName(state.lookup.service)}` : 'your profile'); }
-    const seen = new Set();
-    recentSongs = out.filter((s) => s && !seen.has(s.id) && seen.add(s.id));
-    if (!recentSongs.length && errors.length) { recentStatus = 'error'; recentError = `${errors.join(' and ')} didn’t answer.`; }
-    else { recentStatus = 'ready'; scheduleRecs(); }
-    renderRecent();
-  }
-  function renderRecent() {
-    const ul = $('#recent');
-    const st = $('#recent-state');
-    $('#recent-source').textContent = recentFrom.join(' + ');
-    if (recentStatus === 'loading') { stateBlock(st); skeleton(ul, 4); return; }
-    if (!anyHistory()) {
-      ul.innerHTML = '';
-      stateBlock(st, { title: 'See what you’ve been playing', body: 'Connect a music service and your recent songs show up here, one tap from a rating. No connection? Use “Find my account” with a public Last.fm or Spotify profile.' + (am.error ? `<br><span style="color:var(--danger)">${esc(am.error)}</span>` : ''),
-        actions: [{ label: 'Connect Apple Music', run: amConnect }, { label: 'Other services', run: () => openConnectSettings() }] });
-      return;
-    }
-    if (recentStatus === 'error') {
-      ul.innerHTML = '';
-      stateBlock(st, { error: true, title: 'Couldn’t load your recent plays', body: esc(recentError) + ' Your ratings are safe.', actions: [{ label: 'Try again', run: loadRecent }] });
-      return;
-    }
-    ul.innerHTML = '';
-    const mine = scoreMapOf(state.order);
-    recentSongs.slice(0, 20).forEach((s) => ul.appendChild(songRow(s, { mine: mine[s.id], rateLabel: 'Rate this', addList: true })));
-    stateBlock(st, recentSongs.length ? {} : { title: 'Nothing played lately', body: 'Play something, then pull down to refresh.' });
-  }
-
   // =====================================================================
-  // CHARTS
+  // CHARTS and MOST STREAMED: two tabs, each with the genre selector
   // =====================================================================
-  let genre = 'all';
+  let genre = 'all';            // shared by both tabs
   let chartSongs = [];
-  let chartSeq = 0;
+  const chartSeq = { current: 0, streamed: 0 };
+  const chartShown = { current: '', streamed: '' }; // "genre|country" on screen
+  const KIND_OF = { charts: 'current', streamed: 'streamed' };
+  const VIEW_OF = { current: 'charts', streamed: 'streamed' };
   const TABS_G = () => [G.ALL, ...G.GENRES];
   function renderGenreStrip() {
-    $('#genre-strip').innerHTML = TABS_G().map((g) => `<button class="${g.key === genre ? 'active' : ''}" data-genre="${g.key}" role="tab" aria-selected="${g.key === genre}">${esc(g.label)}</button>`).join('');
+    const html = TABS_G().map((g) => `<button class="${g.key === genre ? 'active' : ''}" data-genre="${g.key}" role="tab" aria-selected="${g.key === genre}">${esc(g.label)}</button>`).join('');
+    $$('.genre-strip').forEach((el) => { el.innerHTML = html; });
   }
-  $('#genre-strip').addEventListener('click', (e) => {
+  $$('.genre-strip').forEach((strip) => strip.addEventListener('click', (e) => {
     const b = e.target.closest('[data-genre]');
     if (!b || b.dataset.genre === genre) return;
     genre = b.dataset.genre;
-    $$('#genre-strip button').forEach((x) => { const on = x === b; x.classList.toggle('active', on); x.setAttribute('aria-selected', on); });
-    b.scrollIntoView({ inline: 'center', block: 'nearest', behavior: M.reduced() ? 'auto' : 'smooth' });
-    loadCharts();
-  });
+    renderGenreStrip();
+    const on = $(`[data-genre="${genre}"]`, strip);
+    if (on) on.scrollIntoView({ inline: 'center', block: 'nearest', behavior: M.reduced() ? 'auto' : 'smooth' });
+    loadCharts(strip.dataset.kind);
+  }));
   const big = (n) => (n >= 1e9 ? (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(n));
   function ago(t) {
     if (!t) return '';
     const m = Math.round((Date.now() - t) / 60000);
     return m < 2 ? 'just now' : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
   }
-  /** Chart row → song. Rows without an Apple id get matched when you first play, rate or add them. */
+  /** Chart row → song. Rows without a catalog id get matched when you first play, rate or add them. */
   function chartSong(r) {
     const known = r.appleId && (state.songs[r.appleId] || lastResults.find((s) => s.id === r.appleId));
     return known || { id: r.appleId || 'q:' + (r.artist + '|' + r.title).toLowerCase(), title: r.title, artist: r.artist, album: r.album || '', art: r.art || '', preview: r.preview || '', url: '', genre: '', year: '', explicit: false, pending: !r.appleId };
@@ -556,43 +487,48 @@
     if (r.peak) bits.push(`peak #${r.peak}`);
     return bits.join(' · ');
   }
-  async function loadCharts({ fresh = false } = {}) {
-    const seq = ++chartSeq;
-    const kinds = [['current', 50], ['streamed', 25]];
-    kinds.forEach(([k]) => { skeleton($(`#chart-${k}`), 5); $(`#${k}-source`).innerHTML = ''; $(`#${k}-note`).innerHTML = ''; stateBlock($(`#chart-${k}-state`)); });
-    $('#albums-section').hidden = true;
+  /** kind: 'current' (Charts tab) or 'streamed' (Most Streamed tab). */
+  async function loadCharts(kind, { fresh = false } = {}) {
+    const seq = ++chartSeq[kind];
+    const ul = $(`#chart-${kind}`);
+    chartShown[kind] = genre + '|' + state.country;
+    skeleton(ul, 5);
+    $(`#${kind}-source`).innerHTML = ''; $(`#${kind}-note`).innerHTML = ''; stateBlock($(`#chart-${kind}-state`));
+    if (kind === 'current') $('#albums-section').hidden = true;
     let v;
     try { v = await Charts.load(genre, { fresh }); }
     catch (_) {
-      if (seq !== chartSeq) return;
-      kinds.forEach(([k]) => { $(`#chart-${k}`).innerHTML = ''; stateBlock($(`#chart-${k}-state`), { error: true, title: 'Charts didn’t load', body: 'Check your connection, then try again.', actions: [{ label: 'Try again', run: () => loadCharts({ fresh: true }) }] }); });
+      if (seq !== chartSeq[kind]) return;
+      ul.innerHTML = ''; chartShown[kind] = '';
+      stateBlock($(`#chart-${kind}-state`), { error: true, title: 'This chart didn’t load', body: 'Check your connection, then try again.', actions: [{ label: 'Try again', run: () => loadCharts(kind, { fresh: true }) }] });
       return;
     }
-    if (seq !== chartSeq) return;
-    for (const [k, n] of kinds) {
-      const c = v[k] || { rows: [] };
-      $(`#${k}-source`).innerHTML = c.source ? `<span class="label">${esc(c.source)}${c.updatedAt ? ' · updated ' + esc(ago(c.updatedAt)) : ''}</span>` : '';
-      $(`#${k}-note`).innerHTML = c.note ? `<p class="note">${esc(c.note)}</p>` : '';
-      const ul = $(`#chart-${k}`);
-      ul.innerHTML = '';
-      c.rows.slice(0, n).forEach((r) => { const s = chartSong(r); chartSongs.push(s); ul.appendChild(songRow(s, { rank: r.rank, addList: true, meta: chartMeta(r, k) })); });
-      stateBlock($(`#chart-${k}-state`), c.rows.length || c.note ? {} : { title: 'Nothing here yet', body: 'This chart came back empty.' });
-      if (c.building && !c.rows.length) setTimeout(() => { if (seq === chartSeq && activeView === 'charts') loadCharts({ fresh: true }); }, 20000);
-    }
-    if (v.albums && v.albums.rows && v.albums.rows.length) {
+    if (seq !== chartSeq[kind]) return;
+    const c = v[kind] || { rows: [] };
+    $(`#${kind}-source`).innerHTML = c.source ? `<span class="label">${esc(c.source)}${c.updatedAt ? ' · updated ' + esc(ago(c.updatedAt)) : ''}</span>` : '';
+    $(`#${kind}-note`).innerHTML = c.note ? `<p class="note">${esc(c.note)}</p>` : '';
+    ul.innerHTML = '';
+    c.rows.slice(0, 50).forEach((r) => { const song = chartSong(r); chartSongs.push(song); ul.appendChild(songRow(song, { rank: r.rank, addList: true, meta: chartMeta(r, kind) })); });
+    stateBlock($(`#chart-${kind}-state`), c.rows.length || c.note ? {} : { title: 'Nothing here yet', body: 'This chart came back empty.' });
+    if (c.building && !c.rows.length) setTimeout(() => { if (seq === chartSeq[kind] && activeView === VIEW_OF[kind]) loadCharts(kind, { fresh: true }); }, 20000);
+    if (kind === 'current' && v.albums && v.albums.rows && v.albums.rows.length) {
       $('#albums-section').hidden = false;
       $('#albums-source').innerHTML = `<span class="label">${esc(v.albums.source)} · updated ${esc(ago(v.albums.updatedAt))}</span>`;
-      const ul = $('#chart-albums');
-      ul.innerHTML = '';
-      v.albums.rows.slice(0, 50).forEach((r) => { const s = chartSong(r); ul.appendChild(songRow({ ...s, album: r.title }, { rank: r.rank, meta: chartMeta(r, 'current'), noActions: true })); });
+      const al = $('#chart-albums');
+      al.innerHTML = '';
+      v.albums.rows.slice(0, 50).forEach((r) => { const song = chartSong(r); al.appendChild(songRow({ ...song, album: r.title }, { rank: r.rank, meta: chartMeta(r, 'current'), noActions: true })); });
     }
     if (chartSongs.length > 600) chartSongs = chartSongs.slice(-300);
   }
-  /** Match a chart row to a playable Apple Music song before acting on it. */
+  // Charts come from the server when there is one, so wait briefly for the server check before the first load.
+  let serverKnown = !location.protocol.startsWith('http');
+  /** Show the tab's chart for the selected genre, loading it only if it isn't already on screen. */
+  function ensureChart(view) { const kind = KIND_OF[view]; if (kind && serverKnown && chartShown[kind] !== genre + '|' + state.country) loadCharts(kind); }
+  /** Match a chart row to a playable catalog song before acting on it. */
   async function ensureSong(song) {
     if (!song || !song.pending) return song;
     const hit = await resolveTrack(song.title, song.artist).catch(() => null);
-    if (!hit) { toast(`Couldn’t find “${song.title}” on Apple Music`); return null; }
+    if (!hit) { toast(`Couldn’t find “${song.title}” to play or rate`); return null; }
     chartSongs.push(hit);
     return hit;
   }
@@ -752,11 +688,11 @@
         $('.actions', li).innerHTML = `<button class="add-list ${on ? 'on' : ''}" data-act="toggle" aria-label="${on ? 'Remove from list' : 'Add to list'}">${on ? I.check : I.plus}</button>`;
         ul.appendChild(li);
       });
-      if (!shown.length) ul.innerHTML = `<li class="muted small" style="padding:var(--s-4) 0">${mode === 'search' ? 'Search Apple Music to find songs.' : 'You haven’t rated anything yet.'}</li>`;
+      if (!shown.length) ul.innerHTML = `<li class="muted small" style="padding:var(--s-4) 0">${mode === 'search' ? 'Search to find songs.' : 'You haven’t rated anything yet.'}</li>`;
     };
     openSheet(`<p class="label kicker">Add to ${esc(l.name)}</p>
       <div class="strip" id="adder-strip" style="margin-top:var(--s-3)"><button class="active" data-m="search">Search</button><button data-m="ratings">From my ratings</button></div>
-      <div class="field" style="margin-top:var(--s-3)">${I.search}<input id="adder-q" type="search" placeholder="Search Apple Music" autocomplete="off" aria-label="Search" /></div>
+      <div class="field" style="margin-top:var(--s-3)">${I.search}<input id="adder-q" type="search" placeholder="Search songs, artists, or albums" autocomplete="off" aria-label="Search songs, artists, or albums" /></div>
       <ul class="rows" id="adder-results"></ul>`);
     const ratingsSongs = () => state.order.map((id) => state.songs[id]).filter(Boolean);
     draw();
@@ -774,7 +710,7 @@
     $$('#adder-strip button').forEach((b) => (b.onclick = () => {
       mode = b.dataset.m;
       $$('#adder-strip button').forEach((x) => x.classList.toggle('active', x === b));
-      $('#adder-q').placeholder = mode === 'search' ? 'Search Apple Music' : 'Filter your ratings';
+      $('#adder-q').placeholder = mode === 'search' ? 'Search songs, artists, or albums' : 'Filter your ratings';
       $('#adder-q').value = '';
       shown = mode === 'ratings' ? ratingsSongs() : [];
       draw();
@@ -813,83 +749,122 @@
   }
 
   // =====================================================================
-  // RECOMMENDATIONS
+  // RECOMMENDATIONS: re-run after every rating; Refresh pulls a new batch
   // =====================================================================
+  const BATCH = 12;
   let recSongs = [];
+  let recItems = [];            // the batch on screen: [{ song, reason, predicted }]
   let recsTimer = null;
   let recsSeq = 0;
   let recsDirty = true;
-  function scheduleRecs() { recsDirty = true; clearTimeout(recsTimer); recsTimer = setTimeout(() => { if (activeView === 'recs') loadRecs(); }, 400); }
-  async function loadRecs() {
-    const seq = ++recsSeq;
-    recsDirty = false;
-    const box = $('#recs');
-    if (!recSongs.length) { box.innerHTML = '<ul class="rows" id="recs-skel"></ul>'; skeleton($('#recs-skel'), 4); }
-    stateBlock($('#recs-state'));
+  const recSeen = new Set();    // songs shown in earlier batches; Refresh skips them
+  let recCause = null;          // what changed: { rated }, { removed }, { moved }
+  const recKey = (s) => norm(s.artist) + '|' + norm(String(s.title).replace(/\s*[([].*$/, ''));
+  /** Something about my ratings changed. Update now if the picks are (or were) on screen, else on next visit. */
+  function scheduleRecs(cause = null, delay = 400) {
+    recsDirty = true;
+    if (cause) recCause = cause;
+    clearTimeout(recsTimer);
+    if (activeView === 'recs' || recItems.length) recsTimer = setTimeout(() => loadRecs(), delay);
+  }
+  /** Every candidate source, best first: listeners like you, favourite artists, then the genre charts. */
+  async function gatherRecs(exclude) {
     const items = [];
     let community = 0;
-    const heard = recentSongs.slice(0, 50);
-    try {
-      if (sync.server && sync.awake) {
-        const songs = {};
-        state.order.forEach((id) => { if (state.songs[id]) songs[id] = state.songs[id]; });
-        const r = await api('/api/recommendations', { method: 'POST', body: { order: state.order, songs, heard, limit: 30 }, timeout: 20000 }).catch(() => ({ ok: false }));
-        if (r.ok) { items.push(...r.data.items); community = r.data.community || 0; }
+    if (sync.server && sync.awake) {
+      const songs = {};
+      state.order.forEach((id) => { if (state.songs[id]) songs[id] = state.songs[id]; });
+      const r = await api('/api/recommendations', { method: 'POST', body: { order: state.order, songs, exclude, limit: 40 }, timeout: 20000 }).catch(() => ({ ok: false }));
+      if (r.ok) { items.push(...r.data.items); community = r.data.community || 0; }
+    }
+    // Favourite artists' other songs: familiar, not random.
+    if (rated()) {
+      const favs = groupStats(state.order, state.songs, 'artist').filter((g) => g.avg >= 6).sort((a, b) => b.avg - a.avg).slice(0, 4);
+      for (const g of favs) {
+        try {
+          const best = g.entries[0];
+          const songs = (await searchSongs(g.name)).filter((x) => norm(x.artist) === g.key).slice(0, 8);
+          songs.forEach((x) => items.push({ song: x, predicted: null, kind: 'artist', reason: `Because you rated ${state.songs[best.id].title} a ${fmt(best.score)}` }));
+        } catch (_) { /* skip */ }
       }
-      if (!items.length) items.push(...Recommend.recommend({ me: { order: state.order, songs: state.songs, heard }, others: [] }).items);
-      // Rediscover favourite artists' other songs: familiar, not random.
-      if (items.length < 12 && rated()) {
-        const favs = groupStats(state.order, state.songs, 'artist').filter((g) => g.avg >= 6).sort((a, b) => b.avg - a.avg).slice(0, 3);
-        for (const g of favs) {
-          try {
-            const best = g.entries[0];
-            const songs = (await searchSongs(g.name)).filter((s) => norm(s.artist) === g.key && !state.order.includes(s.id)).slice(0, 3);
-            songs.forEach((s) => items.push({ song: s, predicted: null, kind: 'artist', reason: `Because you rated ${state.songs[best.id].title} a ${fmt(best.score)}` }));
-          } catch (_) { /* skip */ }
-        }
-      }
-      // New users: fall back to the genre charts.
-      if (rated() < 3 || items.length < 8) {
-        const counts = {};
-        state.order.forEach((id) => { const k = G.fromName(state.songs[id]?.genre); if (k) counts[k] = (counts[k] || 0) + 1; });
-        const keys = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 2);
-        if (!keys.length) keys.push('pop', 'hiphop');
-        for (const k of keys) {
-          try {
-            const v = (await Charts.load(k)).current || { rows: [] };
-            v.rows.filter((r) => r.appleId && !state.order.includes(r.appleId)).slice(0, 6).forEach((r) => items.push({ song: chartSong(r), predicted: null, kind: 'chart', reason: `#${r.rank} on the ${G.byKey[k].label} chart right now` }));
-          } catch (_) { /* skip */ }
-        }
-      }
-    } catch (_) { /* show whatever we have */ }
+    }
+    // Your top genres' charts (new users start here).
+    const counts = {};
+    state.order.forEach((id) => { const k = G.fromName(state.songs[id]?.genre); if (k) counts[k] = (counts[k] || 0) + 1; });
+    const keys = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 2);
+    if (!keys.length) keys.push('pop', 'hiphop');
+    for (const k of keys) {
+      try {
+        const v = (await Charts.load(k)).current || { rows: [] };
+        v.rows.filter((r) => r.appleId).slice(0, 20).forEach((r) => items.push({ song: chartSong(r), predicted: null, kind: 'chart', reason: `#${r.rank} on the ${G.byKey[k].label} chart right now` }));
+      } catch (_) { /* skip */ }
+    }
+    return { items, community };
+  }
+  async function loadRecs({ refresh = false } = {}) {
+    const seq = ++recsSeq;
+    recsDirty = false;
+    clearTimeout(recsTimer);
+    const cause = refresh ? { refresh: true } : recCause;
+    recCause = null;
+    if (refresh) recItems.forEach((x) => recSeen.add(x.song.id));
+    const box = $('#recs');
+    const btn = $('#recs-refresh');
+    btn.disabled = true; btn.classList.add('busy');
+    if (!recItems.length) { box.innerHTML = '<ul class="rows" id="recs-skel"></ul>'; skeleton($('#recs-skel'), 4); }
+    else box.classList.add('updating');
+    stateBlock($('#recs-state'));
+    let got = { items: [], community: 0 };
+    try { got = await gatherRecs([...recSeen]); } catch (_) { /* show whatever we have */ }
     if (seq !== recsSeq) return;
+    btn.disabled = false; btn.classList.remove('busy');
+    box.classList.remove('updating');
+    // Never suggest a song you've rated (by id, or the same song on another release).
+    const ratedKeys = new Set(state.order.map((id) => state.songs[id]).filter(Boolean).map(recKey));
     const seen = new Set();
-    const list = items.filter((x) => x && x.song && !state.order.includes(x.song.id) && !seen.has(x.song.id) && seen.add(x.song.id)).slice(0, 30);
+    const fresh = got.items.filter((x) => x && x.song && x.song.title && !state.order.includes(x.song.id) && !ratedKeys.has(recKey(x.song)) && !seen.has(recKey(x.song)) && seen.add(recKey(x.song)));
+    let list = fresh.filter((x) => !recSeen.has(x.song.id));
+    let wrapped = false;
+    if (refresh && list.length < Math.min(BATCH, 4) && fresh.length) { recSeen.clear(); list = fresh; wrapped = true; } // seen everything: start over
+    list = list.slice(0, BATCH);
+    const before = new Set(recItems.map((x) => x.song.id));
+    recItems = list;
     recSongs = list.map((x) => x.song);
     const left = 3 - rated();
     const note = left > 0
       ? `Rate ${left} more song${left === 1 ? '' : 's'} to unlock picks from listeners like you. Until then, here’s what’s charting in your genres.`
-      : !(sync.server && sync.awake) ? 'Picks from listeners like you need the Encore server. For now these come from your listening history, favourite artists and the charts.'
-        : !community ? 'Nobody with similar ratings yet. As more people rate songs, these get more personal.' : '';
+      : !(sync.server && sync.awake) ? 'Picks from listeners like you need the Encore server. For now these come from your favourite artists and the charts.'
+        : !got.community ? 'Nobody with similar ratings yet. As more people rate songs, these get more personal.' : '';
     $('#recs-note').innerHTML = note ? `<p class="note">${esc(note)}</p>` : '';
-    box.innerHTML = list.map((x) => `<div class="rec" data-id="${esc(x.song.id)}">
+    const card = (x) => `<div class="rec ${before.size && !before.has(x.song.id) ? 'rec-new' : ''}" data-id="${esc(x.song.id)}">
         <button data-act="play" aria-label="Play ${esc(x.song.title)}">${pack(x.song, 84)}</button>
         <div class="meta" data-act="open"><div class="t1">${esc(x.song.title)}</div><div class="t2">${esc(x.song.artist)}</div>
           <div class="why">${esc(x.reason)}</div>${x.predicted ? `<div class="predict">Listeners like you average ${fmt(x.predicted)}</div>` : ''}</div>
         <div class="btn-row"><button class="btn primary sm" data-act="rate">Rate</button><button class="btn sm" data-act="list">${I.listAdd}Add to list</button></div>
-      </div>`).join('');
-    stateBlock($('#recs-state'), list.length ? {} : { title: 'Nothing to suggest yet', body: 'Rate a few songs or connect a music service, and suggestions show up here.', actions: [{ label: 'Find a song', run: () => { showView('home'); $('#search').focus(); } }] });
+      </div>`;
+    M.flip(box, '.rec', () => { box.innerHTML = list.map(card).join(''); });
+    // Say what changed, with a short pulse so it's clear the picks just updated.
+    const msg = !cause || !before.size ? ''
+      : cause.refresh ? (wrapped ? 'You’ve seen every pick, so here they are again' : 'New batch')
+        : cause.rated ? `Updated for your rating of “${short(cause.rated.title, 40)}”`
+          : cause.removed ? `Updated after removing “${short(cause.removed.title, 40)}”` : 'Updated for your new order';
+    const up = $('#recs-updated');
+    up.textContent = msg;
+    up.classList.remove('pulse');
+    if (msg) { void up.offsetWidth; up.classList.add('pulse'); }
+    stateBlock($('#recs-state'), list.length ? {} : { title: 'Nothing to suggest yet', body: 'Rate a few songs and suggestions show up here.', actions: [{ label: 'Find a song', run: () => { showView('home'); $('#search').focus(); } }] });
   }
+  $('#recs-refresh').onclick = () => { M.haptic(6); loadRecs({ refresh: true }); };
   $('#recs').addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
-    const card = e.target.closest('.rec');
-    if (!b || !card) return;
-    const s = recSongs.find((x) => x.id === card.dataset.id);
-    if (!s) return;
-    if (b.dataset.act === 'play') playFrom(s, recSongs);
-    if (b.dataset.act === 'rate') startRating(s);
-    if (b.dataset.act === 'list') openAddToList(s);
-    if (b.dataset.act === 'open') openDetail(s);
+    const c = e.target.closest('.rec');
+    if (!b || !c) return;
+    const x = recSongs.find((y) => y.id === c.dataset.id);
+    if (!x) return;
+    if (b.dataset.act === 'play') playFrom(x, recSongs);
+    if (b.dataset.act === 'rate') startRating(x);
+    if (b.dataset.act === 'list') openAddToList(x);
+    if (b.dataset.act === 'open') openDetail(x);
   });
 
   // =====================================================================
@@ -919,104 +894,6 @@
     if (!lists.length && !own) return '';
     return `<div class="section"><div class="section-head"><h2 class="owned">${owner !== undefined ? avatarHtml(owner, 'xs') : ''}Lists</h2>${own ? `<button class="btn quiet sm" data-p="new-list">${I.plus}New</button>` : ''}</div>
       ${lists.length ? `<div class="crates">${lists.map((l) => crateHtml(l, songs, own)).join('')}</div>` : '<p class="muted small">No lists yet. Make one for gym songs, road trips, or your best rap song.</p>'}</div>`;
-  }
-  // ----- Connect settings: every service + "Find my account" -----
-  const SERVER_SVCS = ['spotify', 'youtube', 'soundcloud', 'amazon'];
-  const LOOKUP_SVCS = [['lastfm', 'Last.fm'], ['spotify', 'Spotify'], ['youtube', 'YouTube'], ['soundcloud', 'SoundCloud']];
-  function serviceRow(key, name, status, btn, on) {
-    return `<li data-svc-row="${key}"><span class="svc-mark ${on ? 'on' : ''}" aria-hidden="true">${esc(name[0])}</span><div><div class="t1">${esc(name)}</div><div class="t3" style="white-space:normal">${status}</div></div><div class="actions" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btn}</div></li>`;
-  }
-  function servicesHtml() {
-    const rows = [];
-    // Apple Music: MusicKit sign-in in the browser.
-    if (amConnected()) rows.push(serviceRow('apple', 'Apple Music', 'Connected · recent plays on Home, ❤ saves to your library', `<button class="btn quiet sm" data-svc="apple-off">Disconnect</button>`, true));
-    else if (amPossible()) rows.push(serviceRow('apple', 'Apple Music', am.error ? `<span style="color:var(--danger)">${esc(am.error)}</span>` : 'Recent plays, ❤ to your library, add to playlists', '<button class="btn primary sm" data-svc="apple-on">Connect</button>', false));
-    else rows.push(serviceRow('apple', 'Apple Music', `Not set up on this server yet. Needs <code>APPLE_TEAM_ID</code>, <code>APPLE_KEY_ID</code>, <code>APPLE_PRIVATE_KEY_PATH</code>.`, '<button class="btn sm" data-svc="apple-on">Connect</button>', false));
-    // Spotify, YouTube Music, SoundCloud, Amazon Music: server-side OAuth.
-    for (const key of SERVER_SVCS) {
-      const c = connections.find((x) => x.service === key);
-      const name = (c && c.name) || (Services.LIST.find((x) => x.key === key) || {}).name;
-      if (!sync.server) {
-        if (key === 'spotify' && spotifyClientId()) {
-          rows.push(Services.Spotify.connected()
-            ? serviceRow(key, name, 'Connected in this browser', '<button class="btn quiet sm" data-svc="spotify-pkce-off">Disconnect</button>', true)
-            : serviceRow(key, name, 'Recent plays from Spotify', '<button class="btn primary sm" data-svc="spotify-pkce">Connect</button>', false));
-        } else rows.push(serviceRow(key, name, 'Needs the Encore server (its sign-in uses a secret key).', '<span class="badge">Server only</span>', false));
-        continue;
-      }
-      if (!c) continue;
-      if (c.connected && c.waiting) rows.push(serviceRow(key, name, `Signed in${c.account ? ' as ' + esc(c.account) : ''}. Waiting for Amazon Music API access (<code>AMAZON_MUSIC_API_KEY</code>).`, `<button class="btn quiet sm" data-svc="off" data-name="${key}">Disconnect</button>`, false));
-      else if (c.connected) rows.push(serviceRow(key, name, `Connected${c.account ? ' as ' + esc(c.account) : ''} · ${key === 'youtube' ? 'liked videos' : key === 'soundcloud' ? 'likes' : 'recent plays'} on Home, ❤ and playlists sync`, `<button class="btn quiet sm" data-svc="off" data-name="${key}">Disconnect</button>`, true));
-      else if (c.configured) rows.push(serviceRow(key, name, key === 'youtube' ? 'Liked videos and playlists (YouTube has no listening history API)' : key === 'soundcloud' ? 'Your likes and playlists' : key === 'amazon' ? 'Library and playlists (needs Amazon’s API approval)' : 'Recent plays, ❤ to Liked Songs, add to playlists', `<a class="btn primary sm" href="/auth/${key}/start">Connect</a>`, false));
-      else rows.push(serviceRow(key, name, `Not set up on this server yet. Needs ${c.missing.map((m) => `<code>${esc(m)}</code>`).join(', ')}.`, `<button class="btn sm" data-svc="explain" data-name="${key}">Connect</button>`, false));
-    }
-    const lookups = (sync.config && sync.config.lookups) || {};
-    const found = state.lookup ? `<p class="small muted" style="margin:var(--s-2) 0 0">Showing ${esc(state.lookup.account)} on ${esc(svcName(state.lookup.service))}. These also appear under Recently played on Home. <button class="btn quiet sm" data-p="clear-found">Clear</button></p>` : '';
-    return `<div class="section" id="connect-settings"><div class="section-head"><h2>Connect settings</h2></div><ul class="services">${rows.join('')}</ul>
-      <div class="find-account">
-        <h3>Find my account</h3>
-        <p class="small muted">Service not connected, or connection failing? Look up a public profile and rate what’s been playing.</p>
-        ${sync.server ? `<form class="lookup-row" id="lookup-form">
-          <select class="input" name="service" aria-label="Service">${LOOKUP_SVCS.map(([k, n]) => `<option value="${k}" ${lookups[k] === false ? 'disabled' : ''}>${n}${lookups[k] === false ? ' (not set up)' : ''}</option>`).join('')}</select>
-          <input class="input" name="input" placeholder="Username or profile link" autocapitalize="none" required aria-label="Username or profile link" />
-          <button class="btn primary" type="submit">Find</button>
-        </form>
-        <p class="form-error" id="lookup-error" hidden></p>${found}
-        <ul class="rows" id="found-list"></ul>` : '<p class="small muted">Profile lookups need the Encore server.</p>'}
-      </div></div>`;
-  }
-  function renderFound() {
-    const ul = $('#found-list');
-    if (!ul) return;
-    ul.innerHTML = '';
-    const mine = scoreMapOf(state.order);
-    foundSongs.slice(0, 20).forEach((s) => ul.appendChild(songRow(s, { mine: mine[s.id], rateLabel: 'Rate this', addList: true })));
-  }
-  async function lookupAccount(service, input) {
-    const err = $('#lookup-error');
-    const btn = $('#lookup-form button');
-    err.hidden = true;
-    btn.disabled = true; btn.textContent = 'Finding…';
-    skeleton($('#found-list'), 3);
-    const r = await api('/api/lookup', { method: 'POST', body: { service, input }, timeout: 30000 }).catch(() => ({ ok: false, data: { error: 'Can’t reach the server.' } }));
-    btn.disabled = false; btn.textContent = 'Find';
-    if (!r.ok) { $('#found-list').innerHTML = ''; err.textContent = r.data.error || 'Couldn’t find that profile.'; err.hidden = false; return; }
-    const songs = await toSongs(r.data.tracks || [], 20);
-    if (!songs.length) { $('#found-list').innerHTML = ''; err.textContent = `Found ${r.data.account}, but no public songs to show.`; err.hidden = false; return; }
-    foundSongs = songs;
-    writeJSON('encore.foundSongs', songs);
-    state.lookup = { service, input, account: r.data.account, at: Date.now() };
-    save();
-    renderProfile();
-    toast(`Found ${r.data.account}: ${songs.length} songs to rate`);
-    loadRecent();
-  }
-  $('#profile').addEventListener('submit', (e) => {
-    if (e.target.id !== 'lookup-form') return;
-    e.preventDefault();
-    const f = Object.fromEntries(new FormData(e.target));
-    lookupAccount(f.service, f.input.trim());
-  });
-  bindList($('#profile'), (id) => foundSongs.find((s) => s.id === id) || state.songs[id]);
-  async function serviceAction(act, key) {
-    if (act === 'apple-on') return amConnect();
-    if (act === 'apple-off') return amDisconnect();
-    if (act === 'spotify-pkce') return spotifyConnect();
-    if (act === 'spotify-pkce-off') { Services.Spotify.disconnect(); renderAll(); loadRecent(); return toast('Spotify disconnected'); }
-    if (act === 'explain') {
-      const c = connections.find((x) => x.service === key);
-      return openSheet(`<p class="label kicker">${esc(c.name)}</p><h3 class="prompt">Not set up yet</h3><p class="center muted">This server needs ${c.missing.map((m) => `<code>${esc(m)}</code>`).join(', ')} in its <code>.env</code> before ${esc(c.name)} can connect. SETUP.md has the steps.</p><p class="center small muted">Until then, use <b>Find my account</b> below.</p>`);
-    }
-    if (act === 'off') {
-      await api(`/api/connections/${key}/disconnect`, { method: 'POST', body: {} }).catch(() => {});
-      await loadConnections();
-      renderAll(); loadRecent();
-      toast(`${svcName(key)} disconnected`);
-    }
-  }
-  function openConnectSettings() {
-    showView('profile');
-    setTimeout(() => { const el = $('#connect-settings'); if (el) el.scrollIntoView({ behavior: M.reduced() ? 'auto' : 'smooth', block: 'start' }); }, 60);
   }
   /** Username field: live availability check (sign-up and edit profile). */
   function watchUsername(input, hint, current) {
@@ -1059,12 +936,9 @@
         ${u ? `<label class="toggle"><span>Public profile<br /><small class="muted">People can find you and see your ratings and public lists</small></span><span class="switch"><input type="checkbox" id="public-toggle" ${u.isPublic ? 'checked' : ''} /><i></i></span></label>` : ''}
         <div class="btn-row">${u && u.isPublic ? `<button class="btn sm" data-p="copy">${I.share}Copy profile link</button>` : ''}<button class="btn sm" data-p="import">Import</button>${u ? '<button class="btn quiet sm" data-p="logout">Sign out</button>' : ''}</div></div>`;
     const people = sync.server ? `<div class="section"><div class="section-head"><h2>Find people</h2></div><div class="field" style="height:44px">${I.search}<input id="people-search" type="search" placeholder="Search by name or username" autocomplete="off" aria-label="Search people" /></div><ul id="people-results" class="people"></ul></div>` : '';
-    el.innerHTML = head + top10Html(state.order, state.songs, sync.user) + listsHtml(state.lists, state.songs, true, sync.user) + servicesHtml() + people + settings;
-    renderFound();
+    el.innerHTML = head + top10Html(state.order, state.songs, sync.user) + listsHtml(state.lists, state.songs, true, sync.user) + people + settings;
   }
   $('#profile').addEventListener('click', async (e) => {
-    const svc = e.target.closest('[data-svc]');
-    if (svc) { serviceAction(svc.dataset.svc, svc.dataset.name); return; }
     const person = e.target.closest('[data-user]');
     if (person) return openUser(person.dataset.user);
     const crate = e.target.closest('[data-list]');
@@ -1075,7 +949,6 @@
     if (a === 'signup' || a === 'login') openAuth(a);
     if (a === 'edit') openEditProfile();
     if (a === 'avatar') $('#avatar-file').click();
-    if (a === 'clear-found') { foundSongs = []; state.lookup = null; writeJSON('encore.foundSongs', []); save(); renderProfile(); loadRecent(); }
     if (a === 'share') openShare();
     if (a === 'new-list') openNewList();
     if (a === 'import') $('#import-file').click();
@@ -1108,6 +981,7 @@
     openSheet(`<p class="label kicker">Profile photo</p><h3 class="prompt">Crop your photo</h3>
       <div class="cropper"><canvas id="crop-canvas" width="${SIZE * 2}" height="${SIZE * 2}" style="width:${SIZE}px;height:${SIZE}px" aria-label="Drag to position your photo"></canvas><i class="crop-ring" aria-hidden="true"></i></div>
       <label class="crop-zoom"><span class="label">Zoom</span><input type="range" id="crop-zoom" min="1" max="4" step="0.01" value="1" /></label>
+      <div class="crop-preview" aria-label="Preview"><span class="label">Preview</span><span class="avatar lg"><canvas id="crop-prev" width="192" height="192"></canvas></span><span class="avatar xs"><canvas id="crop-prev-sm" width="48" height="48"></canvas></span><span class="small muted">@${esc(sync.user.username)}</span></div>
       <div class="btn-row center"><button class="btn" data-dismiss>Cancel</button><button class="btn primary" id="crop-save">Save photo</button></div>`);
     const cv = $('#crop-canvas');
     const ctx = cv.getContext('2d');
@@ -1118,7 +992,11 @@
       x = Math.min(0, Math.max(SIZE - w, x)); y = Math.min(0, Math.max(SIZE - h, y));
     };
     const center = () => { x = (SIZE - bmp.width * base * zoom) / 2; y = (SIZE - bmp.height * base * zoom) / 2; };
-    const draw = () => { ctx.setTransform(2, 0, 0, 2, 0, 0); ctx.fillStyle = '#16100c'; ctx.fillRect(0, 0, SIZE, SIZE); ctx.drawImage(bmp, x, y, bmp.width * base * zoom, bmp.height * base * zoom); };
+    const previews = [$('#crop-prev'), $('#crop-prev-sm')].map((c) => [c, c.getContext('2d')]);
+    const draw = () => {
+      ctx.setTransform(2, 0, 0, 2, 0, 0); ctx.fillStyle = '#16100c'; ctx.fillRect(0, 0, SIZE, SIZE); ctx.drawImage(bmp, x, y, bmp.width * base * zoom, bmp.height * base * zoom);
+      previews.forEach(([c, pc]) => pc.drawImage(cv, 0, 0, c.width, c.height)); // exactly what gets saved
+    };
     center(); draw();
     let drag = null;
     cv.addEventListener('pointerdown', (ev) => { drag = { x0: ev.clientX - x, y0: ev.clientY - y }; cv.setPointerCapture(ev.pointerId); });
@@ -1188,11 +1066,10 @@
     const mine = scoreMapOf(state.order);
     const common = R.flatten(v.order).filter((e) => mine[e.id]);
     const match = common.length >= 3 ? `<span class="badge warn">${Math.max(0, Math.round(100 - (common.reduce((a, e) => a + Math.abs(e.score - mine[e.id].score), 0) / common.length) * 10))}% taste match</span>` : '';
-    const svcNames = (v.connections || []).map((k) => esc((Services.LIST.find((s) => s.key === k) || {}).name || k));
     $('#user-profile').innerHTML = `<div class="profile-card">${avatarHtml(v.user, 'xl')}<h1 class="display" id="user-name">${esc(v.user.displayName)}</h1><div class="muted">@${esc(v.user.username)}</div>
         ${v.user.bio ? `<p class="bio">${esc(v.user.bio)}</p>` : ''}
         <div class="counts"><div><b>${v.order.length}</b><span class="label">Ratings</span></div><div><b>${v.lists.length}</b><span class="label">Lists</span></div><div><b>${common.length}</b><span class="label">In common</span></div></div>
-        ${match}${svcNames.length ? `<p class="t3">Listens on ${svcNames.join(', ')}</p>` : ''}</div>
+        ${match}</div>
       ${top10Html(v.order, v.songs, v.user)}${listsHtml(v.lists, v.songs, false, v.user)}`;
   }
   $('#user-profile').addEventListener('click', (e) => {
@@ -1201,7 +1078,7 @@
     const l = viewing.lists.find((x) => x.id === crate.dataset.list);
     if (!l) return;
     const mine = scoreMapOf(state.order);
-    openSheet(`<p class="label kicker">${esc(viewing.user.displayName)}’s list</p><h3 class="prompt">${esc(l.name)}</h3><ol class="rows" id="their-list"></ol>`);
+    openSheet(`<p class="label kicker owned center-owned">${avatarHtml(viewing.user, 'xs')}@${esc(viewing.user.username)}’s list</p><h3 class="prompt">${esc(l.name)}</h3><ol class="rows" id="their-list"></ol>`);
     l.songIds.forEach((id, i) => { const s = viewing.songs[id]; if (s) $('#their-list').appendChild(songRow(s, { rank: i + 1, mine: mine[id] || null, addList: true })); });
     bindList($('#their-list'), (id) => viewing.songs[id]);
   });
@@ -1243,265 +1120,30 @@
   }
 
   // =====================================================================
-  // Apple Music (MusicKit JS) + Spotify
-  // =====================================================================
-  const am = { music: null, devToken: null, loading: null, error: '' };
-  const amConnected = () => !!(am.music && am.music.isAuthorized);
-  function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = src; s.async = true; s.onload = resolve; s.onerror = () => reject(new Error('Couldn’t load Apple Music. Check your connection.'));
-      document.head.appendChild(s);
-    });
-  }
-  function amInit() {
-    if (am.loading) return am.loading;
-    am.loading = (async () => {
-      let token = CFG.musickitDeveloperToken || '';
-      if (!token && sync.server) { const r = await api('/api/apple/developer-token').catch(() => ({ ok: false })); if (r.ok) token = r.data.token; }
-      if (!token) throw new Error('Apple Music isn’t set up on this site yet. The site owner needs to add a MusicKit key.');
-      am.devToken = token;
-      if (!window.MusicKit) {
-        const ready = new Promise((res) => document.addEventListener('musickitloaded', res, { once: true }));
-        await loadScript('https://js-cdn.music.apple.com/musickit/v3/musickit.js');
-        if (!window.MusicKit) await ready;
-      }
-      am.music = await MusicKit.configure({ developerToken: token, app: { name: 'Encore', build: '4.0' } });
-      am.music.addEventListener('playbackStateDidChange', () => {
-        refreshPlaying();
-        const st = am.music.playbackState;
-        if (pb.full && (st === MusicKit.PlaybackStates.completed || st === MusicKit.PlaybackStates.ended)) next();
-      });
-      return am.music;
-    })();
-    am.loading.catch(() => { am.loading = null; });
-    return am.loading;
-  }
-  async function amConnect() {
-    try {
-      const music = await amInit();
-      await music.authorize();
-      try { localStorage.setItem(AM_FLAG, '1'); } catch (_) { /* ignore */ }
-      if (music.storefrontId && music.storefrontId !== state.country) state.country = music.storefrontId;
-      state.connections.apple = { connectedAt: Date.now(), name: '' };
-      am.error = '';
-      save();
-      toast('Apple Music connected');
-      loadRecent();
-    } catch (err) {
-      am.error = (err && err.message) || 'Couldn’t connect Apple Music. Try again.';
-      if (/cancel|denied/i.test(am.error)) am.error = 'Apple Music connection cancelled.';
-      toast(am.error);
-    }
-    renderAll();
-  }
-  async function amDisconnect() {
-    try { await am.music?.unauthorize(); } catch (_) { /* ignore */ }
-    removeKey(AM_FLAG);
-    delete state.connections.apple;
-    save(); renderAll(); loadRecent();
-    toast('Apple Music disconnected');
-  }
-  async function amFetch(path, opts = {}) {
-    const res = await fetch('https://api.music.apple.com' + path, {
-      method: opts.method || 'GET',
-      headers: { Authorization: 'Bearer ' + am.devToken, 'Music-User-Token': am.music.musicUserToken, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
-    if (!res.ok) throw new Error('Apple Music error ' + res.status);
-    // Library adds return 202 with an empty body, and ratings can return 204.
-    const text = await res.text();
-    return text ? JSON.parse(text) : {};
-  }
-  function amToSong(r) {
-    const a = r.attributes || {};
-    return {
-      id: String(r.id), title: a.name, artist: a.artistName, album: a.albumName || '', art: a.artwork && a.artwork.url ? a.artwork.url : '',
-      preview: (a.previews && a.previews[0] && a.previews[0].url) || '', url: a.url || '', genre: (a.genreNames || []).find((g) => g !== 'Music') || '',
-      year: (a.releaseDate || '').slice(0, 4), explicit: a.contentRating === 'explicit', artistId: '', albumId: '',
-    };
-  }
-  async function amRecent() {
-    const d = await amFetch('/v1/me/recent/played/tracks?types=songs&limit=30');
-    const seen = new Set();
-    return (d.data || []).filter((r) => r.type === 'songs' && !seen.has(r.id) && seen.add(r.id)).map(amToSong);
-  }
-  // ----- Apple Music library (MusicKit, in the browser) -----
-  const isCatalogId = (id) => /^\d+$/.test(String(id));
-  async function amCall(path, opts) {
-    try { return await amFetch(path, opts); }
-    catch (e) {
-      if (/ 40[13]$/.test(e.message)) { needsReconnect('apple'); throw Object.assign(new Error('Apple Music needs you to reconnect.'), { reauth: true }); }
-      throw e;
-    }
-  }
-  const appleLib = {
-    async favorite(song) {
-      if (!isCatalogId(song.id)) throw new Error('Not an Apple Music song');
-      await amCall(`/v1/me/library?ids[songs]=${song.id}`, { method: 'POST' });
-      await amCall(`/v1/me/ratings/songs/${song.id}`, { method: 'PUT', body: { type: 'rating', attributes: { value: 1 } } }).catch(() => {}); // "Love" is a bonus
-      return true;
-    },
-    async playlists() {
-      const d = await amCall('/v1/me/library/playlists?limit=100');
-      return (d.data || []).filter((p) => !p.attributes || p.attributes.canEdit !== false).map((p) => ({ id: p.id, name: (p.attributes && p.attributes.name) || 'Playlist', count: null }));
-    },
-    async createPlaylist(name, song) {
-      const d = await amCall('/v1/me/library/playlists', { method: 'POST', body: { attributes: { name, description: 'Made with Encore' }, relationships: { tracks: { data: isCatalogId(song.id) ? [{ id: song.id, type: 'songs' }] : [] } } } });
-      return { id: d.data && d.data[0] && d.data[0].id, name, added: true };
-    },
-    async add(id, song) {
-      if (!isCatalogId(song.id)) throw new Error('Not an Apple Music song');
-      await amCall(`/v1/me/library/playlists/${encodeURIComponent(id)}/tracks`, { method: 'POST', body: { data: [{ id: song.id, type: 'songs' }] } });
-      return true;
-    },
-  };
-  /** Server-connected services (Spotify, YouTube, SoundCloud, Amazon): same verbs over /api/svc. */
-  const serverLib = (svc) => ({
-    async call(path, opts) {
-      const r = await api(`/api/svc/${svc}${path}`, { ...opts, timeout: 30000 }).catch(() => ({ ok: false, status: 0, data: { error: 'Can’t reach the server.' } }));
-      if (r.status === 401 && r.data.reauth) { needsReconnect(svc); throw Object.assign(new Error(r.data.error), { reauth: true }); }
-      if (!r.ok) throw new Error(r.data.error || `${svcName(svc)} didn’t answer`);
-      return r.data;
-    },
-    favorite(song) { return this.call('/favorite', { method: 'POST', body: { title: song.title, artist: song.artist, album: song.album } }); },
-    async playlists() { return (await this.call('/playlists')).playlists; },
-    async createPlaylist(name, song) { const p = (await this.call('/playlists', { method: 'POST', body: { name } })).playlist; await this.add(p.id, song); return { ...p, added: true }; },
-    add(id, song) { return this.call(`/playlists/${encodeURIComponent(id)}/tracks`, { method: 'POST', body: { title: song.title, artist: song.artist, album: song.album } }); },
-  });
-  /** Services that can save favorites and playlists right now. */
-  function libraryTargets() {
-    const t = [];
-    if (amConnected()) t.push({ key: 'apple', name: 'Apple Music', lib: appleLib });
-    for (const c of linked()) t.push({ key: c.service, name: c.name, lib: serverLib(c.service) });
-    return t;
-  }
-  /** "Reconnect" when a service's access was revoked or expired beyond refresh. */
-  function needsReconnect(svc) {
-    const c = connections.find((x) => x.service === svc);
-    if (c) c.connected = false;
-    renderProfile();
-    toast(`${svcName(svc)} needs you to reconnect`, { action: 'Reconnect', run: () => (svc === 'apple' ? amConnect() : location.assign(`/auth/${svc}/start`)) });
-  }
-
-  // ----- ❤ Favorites: saved in Encore, and to every connected library -----
-  const favButton = (song, attr) => { const on = state.favorites.includes(song.id); return `<button class="btn ${on ? 'fav-on' : ''}" ${attr} aria-pressed="${on}">${on ? I.heartOn : I.heart}${on ? 'Favorited' : 'Favorite'}</button>`; };
-  async function toggleFavorite(song) {
-    remember(song);
-    const i = state.favorites.indexOf(song.id);
-    if (i >= 0) {
-      state.favorites.splice(i, 1);
-      save(); refreshPlaying();
-      toast('Removed from favorites (your service libraries keep the song)');
-      return;
-    }
-    state.favorites.unshift(song.id);
-    save(); refreshPlaying();
-    M.haptic([8, 30, 8]);
-    const targets = libraryTargets();
-    if (!targets.length) { toast('Favorited. Connect Apple Music or Spotify to save favorites to your library too', { action: 'Connect', run: openConnectSettings }); return; }
-    const results = await Promise.allSettled(targets.map((t) => t.lib.favorite(song)));
-    const ok = targets.filter((_, k) => results[k].status === 'fulfilled').map((t) => t.name);
-    const bad = targets.map((t, k) => (results[k].status === 'rejected' && !results[k].reason.reauth ? `${t.name}: ${results[k].reason.message}` : null)).filter(Boolean);
-    if (ok.length && !bad.length) toast(`Saved to ${ok.join(' and ')}`);
-    else if (ok.length) toast(`Saved to ${ok.join(' and ')}. ${bad.join('. ')}`);
-    else if (bad.length) toast(`Favorited in Encore. ${bad.join('. ')}`);
-  }
-
-  // ----- Add to playlist (on a connected service) -----
-  function openPlaylistPicker(song) {
-    const targets = libraryTargets();
-    if (!targets.length) {
-      openSheet(`<p class="label kicker">Add to playlist</p><h3 class="prompt">Connect a service first</h3><p class="center muted">Playlists live on Apple Music, Spotify, YouTube Music, SoundCloud or Amazon Music. Connect one to add “${esc(song.title)}” to a playlist there.</p><div class="btn-row center"><button class="btn primary" id="pl-connect">Connect settings</button></div>`);
-      $('#pl-connect').onclick = () => { closeSheet(); openConnectSettings(); };
-      return;
-    }
-    let cur = targets[0];
-    openSheet(`<p class="label kicker">Add to playlist</p><h3 class="prompt">${esc(song.title)}</h3>
-      ${targets.length > 1 ? `<div class="strip" id="pl-strip">${targets.map((t, i) => `<button class="${i === 0 ? 'active' : ''}" data-t="${t.key}">${esc(t.name)}</button>`).join('')}</div>` : `<p class="center label">${esc(cur.name)}</p>`}
-      <form class="lookup-row" id="pl-new" style="margin-top:var(--s-3)"><input class="input" name="name" placeholder="New playlist name" maxlength="100" required aria-label="New playlist name" /><button class="btn" type="submit">${I.plus}Create</button></form>
-      <p class="form-error" id="pl-error" hidden></p>
-      <ul class="pick-lists" id="pl-list"></ul>`);
-    const err = (m) => { const e = $('#pl-error'); if (!e) return; e.textContent = m || ''; e.hidden = !m; };
-    async function load() {
-      err('');
-      const ul = $('#pl-list');
-      ul.innerHTML = '<li class="muted small">Loading playlists…</li>';
-      try {
-        const pls = await cur.lib.playlists();
-        if (!$('#pl-list')) return;
-        ul.innerHTML = pls.length ? pls.map((p) => `<li data-pl="${esc(p.id)}" tabindex="0" role="button"><span>${esc(p.name)}</span>${p.count != null ? `<small class="muted">${p.count}</small>` : ''}<i class="check">${I.check}</i></li>`).join('') : '<li class="muted small">No playlists you can edit yet. Create one above.</li>';
-      } catch (e) { ul.innerHTML = ''; err(e.reauth ? `${cur.name} needs you to reconnect.` : e.message || `Couldn’t load your ${cur.name} playlists.`); }
-    }
-    $('#pl-list').addEventListener('click', async (e) => {
-      const li = e.target.closest('[data-pl]');
-      if (!li || li.classList.contains('busy')) return;
-      li.classList.add('busy');
-      err('');
-      try { await cur.lib.add(li.dataset.pl, song); li.classList.add('on'); M.haptic(8); toast(`Added to “${li.querySelector('span').textContent}” on ${cur.name}`); }
-      catch (x) { err(x.message || 'Couldn’t add it. Try again.'); }
-      li.classList.remove('busy');
-    });
-    $('#pl-new').onsubmit = async (e) => {
-      e.preventDefault();
-      const name = String(new FormData(e.target).get('name')).trim();
-      if (!name) return;
-      const b = e.target.querySelector('button');
-      b.disabled = true;
-      try { await cur.lib.createPlaylist(name, song); toast(`Created “${name}” on ${cur.name} with this song`); e.target.reset(); load(); }
-      catch (x) { err(x.message || 'Couldn’t create the playlist.'); }
-      b.disabled = false;
-    };
-    if ($('#pl-strip')) $$('#pl-strip button').forEach((b) => (b.onclick = () => { cur = targets.find((t) => t.key === b.dataset.t); $$('#pl-strip button').forEach((x) => x.classList.toggle('active', x === b)); load(); }));
-    load();
-  }
-
-
-  function spotifyConnect() {
-    const id = spotifyClientId();
-    if (!id) { toast('Spotify isn’t set up on this site yet'); return; }
-    Services.Spotify.connect(id).catch(() => toast('Couldn’t start Spotify sign-in'));
-  }
-
-  // =====================================================================
-  // Playback: crossfaded previews, or full songs via Apple Music
+  // Playback: crossfaded 30-second previews
   // =====================================================================
   const AE = window.AudioEngine;
-  const pb = { queue: [], index: -1, song: null, full: false };
-  const musicPlaying = () => !!(am.music && window.MusicKit && am.music.playbackState === MusicKit.PlaybackStates.playing);
-  function isPlaying(id) {
-    if (!pb.song || pb.song.id !== id) return false;
-    return pb.full ? musicPlaying() : AE.playing;
-  }
+  const pb = { queue: [], index: -1, song: null };
+  const isPlaying = (id) => !!(pb.song && pb.song.id === id && AE.playing);
   function playFrom(song, list) {
     if (pb.song && pb.song.id === song.id) { togglePlay(); return; }
-    const queue = (list && list.length ? list : [song]).filter((s) => s.preview || (amConnected() && /^\d+$/.test(s.id)));
-    let idx = queue.findIndex((s) => s.id === song.id);
+    const queue = (list && list.length ? list : [song]).filter((x) => x.preview);
+    let idx = queue.findIndex((x) => x.id === song.id);
     if (idx < 0) { queue.unshift(song); idx = 0; }
     pb.queue = queue; pb.index = idx;
     startSong(song);
   }
-  async function startSong(song, dir = 0) {
+  function startSong(song, dir = 0) {
     pb.song = song;
     renderDeck(dir);
-    if (amConnected() && /^\d+$/.test(song.id)) {
-      try { AE.stop(); pb.full = true; await am.music.setQueue({ song: song.id, startPlaying: true }); refreshPlaying(); return; }
-      catch (_) { pb.full = false; }
-    }
-    if (am.music) { try { am.music.stop(); } catch (_) { /* ignore */ } }
-    pb.full = false;
     if (!song.preview) { toast('No preview for this song'); refreshPlaying(); return; }
     AE.play(song).catch(() => toast('Couldn’t play this preview'));
     refreshPlaying();
   }
-  function togglePlay() {
-    if (!pb.song) return;
-    if (pb.full) { musicPlaying() ? am.music.pause() : am.music.play(); } else AE.toggle();
-    M.haptic(6);
-  }
+  function togglePlay() { if (!pb.song) return; AE.toggle(); M.haptic(6); }
   function next() { if (pb.index < pb.queue.length - 1) { pb.index++; startSong(pb.queue[pb.index], 1); } else refreshPlaying(); }
   function prev() { if (pb.index > 0) { pb.index--; startSong(pb.queue[pb.index], -1); } }
-  AE.on('state', (s) => { refreshPlaying(); if (s === 'ended') next(); if (s === 'error') toast('This preview couldn’t load'); });
+  AE.on('state', (st) => { refreshPlaying(); if (st === 'ended') next(); if (st === 'error') toast('This preview couldn’t load'); });
   function refreshPlaying() {
     const id = pb.song && pb.song.id;
     $$('li.row[data-id]').forEach((li) => li.classList.toggle('now', li.dataset.id === id));
@@ -1513,20 +1155,16 @@
     $('#deck-toggle').setAttribute('aria-label', playing ? 'Pause' : 'Play');
     $('#deck-vinyl').classList.toggle('spin', playing);
     $('#deck-next').disabled = !(pb.index < pb.queue.length - 1);
-    const fav = id && state.favorites.includes(id);
-    $('#deck-fav').innerHTML = fav ? I.heartOn : I.heart;
-    $('#deck-fav').classList.toggle('on', !!fav);
-    $('#deck-fav').setAttribute('aria-pressed', !!fav);
   }
   function renderDeck(dir) {
     const deck = $('#deck');
-    const s = pb.song;
-    if (!s) { deck.hidden = true; document.body.classList.remove('has-deck'); return; }
+    const song = pb.song;
+    if (!song) { deck.hidden = true; document.body.classList.remove('has-deck'); return; }
     deck.hidden = false;
     document.body.classList.add('has-deck');
-    $('#deck-vinyl .lbl').innerHTML = artImg(s, 120, { eager: true });
+    $('#deck-vinyl .lbl').innerHTML = artImg(song, 120, { eager: true });
     const meta = $('#deck-meta');
-    meta.innerHTML = `<div class="t1">${esc(s.title)}</div><div class="t3">${esc(s.artist)} · ${pb.full ? 'Apple Music' : 'Preview'}</div>`;
+    meta.innerHTML = `<div class="t1">${esc(song.title)}</div><div class="t3">${esc(song.artist)} · Preview</div>`;
     meta.classList.remove('slide-l', 'slide-r');
     if (dir) { void meta.offsetWidth; meta.classList.add(dir > 0 ? 'slide-l' : 'slide-r'); }
   }
@@ -1538,7 +1176,7 @@
       requestAnimationFrame(frame);
       if ($('#deck').hidden) return;
       const playing = pb.song && isPlaying(pb.song.id);
-      const p = pb.full && am.music ? am.music.currentPlaybackProgress || 0 : AE.progress();
+      const p = AE.progress();
       // Resting off the record at −32°, dropped on the outer groove at −8°, swinging in to +20° at the run-out.
       arm.style.setProperty('--arm', playing || p > 0 ? `${-8 + p * 28}deg` : '-32deg');
       bar.style.setProperty('--p', p);
@@ -1546,7 +1184,6 @@
     requestAnimationFrame(frame);
   })();
   $('#deck-toggle').onclick = togglePlay;
-  $('#deck-fav').onclick = () => pb.song && toggleFavorite(pb.song);
   $('#deck-next').onclick = () => { next(); M.haptic(6); };
   $('#deck-platter').onclick = () => pb.song && openDetail(pb.song);
   $('#deck-meta').onclick = () => pb.song && openDetail(pb.song);
@@ -1579,13 +1216,15 @@
   const body = $('#sheet-body');
   let session = null;
   let returnFocus = null;
+  let sheetWanted = false; // closing within the opening frames must win over the pending slide-in
   function openSheet(html) {
     body.innerHTML = html;
+    sheetWanted = true;
     if (sheetWrap.hidden) {
       returnFocus = document.activeElement;
       sheetWrap.hidden = false;
       document.body.classList.add('no-scroll');
-      requestAnimationFrame(() => requestAnimationFrame(() => sheetWrap.classList.add('in')));
+      requestAnimationFrame(() => requestAnimationFrame(() => { if (sheetWanted) sheetWrap.classList.add('in'); }));
     } else if (!sheetWrap.classList.contains('in')) {
       // Reopened while the previous sheet was still closing: cancel that close.
       document.body.classList.add('no-scroll');
@@ -1596,6 +1235,7 @@
   function closeSheet() {
     if (sheetWrap.hidden) return;
     session = null;
+    sheetWanted = false;
     sheetWrap.classList.remove('in');
     document.body.classList.remove('no-scroll');
     setTimeout(() => { if (!sheetWrap.classList.contains('in')) { sheetWrap.hidden = true; body.innerHTML = ''; } }, 320);
@@ -1611,7 +1251,7 @@
     grab.addEventListener('pointerup', end);
     grab.addEventListener('pointercancel', end);
   })();
-  const recordOut = (song, { out = true } = {}) => `<div class="record-out ${out ? 'out' : ''}" id="record-out">${vinyl(song, '100%', { px: 300, spin: isPlaying(song.id) })}${sleeve(song, 600)}${song.preview || amConnected() ? `<button class="play-fab" data-id="${esc(song.id)}" data-act="play" aria-label="Play ${esc(song.title)}">${isPlaying(song.id) ? I.pause : I.play}</button>` : ''}</div>`;
+  const recordOut = (song, { out = true } = {}) => `<div class="record-out ${out ? 'out' : ''}" id="record-out">${vinyl(song, '100%', { px: 300, spin: isPlaying(song.id) })}${sleeve(song, 600)}${song.preview ? `<button class="play-fab" data-id="${esc(song.id)}" data-act="play" aria-label="Play ${esc(song.title)}">${isPlaying(song.id) ? I.pause : I.play}</button>` : ''}</div>`;
   const songTitle = (song) => `<div class="song-title"><h2>${esc(song.title)}</h2><div class="t2">${esc(song.artist)}</div><div class="t3">${esc(song.album)}${song.year ? ' · ' + song.year : ''}</div></div>`;
   function slideRecordOut() { const r = $('#record-out'); if (r) { r.classList.remove('out'); requestAnimationFrame(() => requestAnimationFrame(() => r.classList.add('out'))); } }
 
@@ -1673,13 +1313,13 @@
         ${songTitle(song)}
         <div class="result"><div class="big-score" id="big-score">0.0</div><div class="place"><b>#${e.rank}</b> of ${n} · ${esc(note)}</div></div>
         <div class="avg-box">${avgLine(groupOf(state.order, state.songs, 'artist', song), 'artist')}${song.album ? avgLine(groupOf(state.order, state.songs, 'album', song), 'album') : ''}</div>
-        <div class="btn-row center">${favButton(song, 'data-done="fav"')}<button class="btn" data-done="list">${I.listAdd}Add to list</button><button class="btn" data-done="playlist">${I.note}Add to playlist</button><button class="btn primary" data-done="close">Done</button></div>
+        <div class="btn-row center"><button class="btn" data-done="list">${I.listAdd}Add to list</button><button class="btn primary" data-done="close">Done</button></div>
       </div>`);
     slideRecordOut();
     M.countUp($('#big-score'), e.score, { duration: 1100 });
     M.haptic([12, 60, 18]);
     renderAll();
-    scheduleRecs();
+    scheduleRecs({ rated: song }, 0); // live: the picks change as soon as you rate
   }
   body.addEventListener('click', (e) => {
     const play = e.target.closest('[data-act="play"]');
@@ -1689,8 +1329,6 @@
     const done = e.target.closest('[data-done]');
     if (done) {
       const s = session && session.song;
-      if (done.dataset.done === 'fav' && s) { toggleFavorite(s).then(() => { done.outerHTML = favButton(s, 'data-done="fav"'); }); return; }
-      if (done.dataset.done === 'playlist' && s) return openPlaylistPicker(s);
       closeSheet();
       if (done.dataset.done === 'list' && s) setTimeout(() => openAddToList(s), 340);
       return;
@@ -1719,10 +1357,7 @@
         ${lists.length ? `<p class="center t3" style="white-space:normal;margin-top:var(--s-3)">On ${lists.map((l) => esc(l.name)).join(', ')}</p>` : ''}
         <div class="btn-row center">
           <button class="btn primary" data-detail="rate">${mine ? 'Re-rate' : 'Rate'}</button>
-          ${favButton(song, 'data-detail="fav"')}
           <button class="btn" data-detail="list">${I.listAdd}Add to list</button>
-          <button class="btn" data-detail="playlist">${I.note}Add to playlist</button>
-          ${song.url ? `<a class="btn" href="${esc(song.url)}" target="_blank" rel="noopener">${I.external}Apple Music</a>` : ''}
           ${mine ? `<button class="btn quiet danger" data-detail="remove">${I.trash}Remove rating</button>` : ''}
         </div>
       </div>`);
@@ -1732,12 +1367,10 @@
     if (!song) return;
     if (act === 'rate') startRating(song);
     else if (act === 'list') openAddToList(song);
-    else if (act === 'fav') toggleFavorite(song).then(() => openDetail(song));
-    else if (act === 'playlist') openPlaylistPicker(song);
     else if (act === 'remove') {
       const before = state.order.slice();
       state.order = R.remove(state.order, song.id);
-      save(); renderAll(); closeSheet(); scheduleRecs();
+      save(); renderAll(); closeSheet(); scheduleRecs({ removed: song });
       toast('Rating removed', { action: 'Undo', run: () => { state.order = before; save(); renderAll(); } });
     }
   }
@@ -1769,10 +1402,9 @@
   // =====================================================================
   // Navigation
   // =====================================================================
-  const TABS = ['home', 'charts', 'lists', 'recs', 'profile'];
+  const TABS = ['home', 'charts', 'streamed', 'lists', 'recs', 'profile'];
   let activeView = 'home';
   const stack = [];
-  let chartsLoaded = false;
   function showView(name, { mode = 'tab' } = {}) {
     if (name === activeView && mode === 'tab') { window.scrollTo({ top: 0, behavior: M.reduced() ? 'auto' : 'smooth' }); return; }
     if (mode === 'push') stack.push({ view: activeView, y: window.scrollY });
@@ -1787,8 +1419,8 @@
     const tabName = TABS.includes(name) ? name : (stack[0] && stack[0].view) || 'lists';
     $$('.tab').forEach((t) => { const on = t.dataset.view === tabName; t.classList.toggle('active', on); t.setAttribute('aria-selected', on); });
     if (mode !== 'pop') window.scrollTo(0, 0);
-    if (name === 'charts' && !chartsLoaded) { chartsLoaded = true; loadCharts(); }
-    if (name === 'recs' && (recsDirty || !recSongs.length)) loadRecs();
+    if (KIND_OF[name]) ensureChart(name);
+    if (name === 'recs' && (recsDirty || !recItems.length)) loadRecs();
   }
   function back() {
     const prevV = stack.pop();
@@ -1858,7 +1490,7 @@
     onDrop: (id, from, to) => {
       const before = state.order.slice();
       state.order = R.move(state.order, id, to);
-      save(); renderAll(); scheduleRecs();
+      save(); renderAll(); scheduleRecs({ moved: true });
       const e = scoreMapOf(state.order)[id];
       toast(`Moved to #${e.rank} · ${fmt(e.score)}`, { action: 'Undo', run: () => { state.order = before; save(); renderAll(); } });
     },
@@ -1874,9 +1506,9 @@
     },
   });
   Gestures.pullToRefresh($('#ptr'), async () => {
-    if (activeView === 'home') await Promise.all([loadTrending({ fresh: true }), loadRecent(), runSearch({ fresh: true })]);
-    else if (activeView === 'charts') await loadCharts({ fresh: true });
-    else if (activeView === 'recs') await loadRecs();
+    if (activeView === 'home') await Promise.all([loadTrending({ fresh: true }), runSearch({ fresh: true })]);
+    else if (KIND_OF[activeView]) await loadCharts(KIND_OF[activeView], { fresh: true });
+    else if (activeView === 'recs') await loadRecs({ refresh: true });
     else if (sync.user) {
       const r = await api('/api/me', { timeout: 20000 }).catch(() => null);
       if (r && r.ok && r.data.user && r.data.version > sync.version && !sync.dirty) adoptServer(r.data.state, r.data.version);
@@ -1913,24 +1545,25 @@
     commands: () => [
       { label: 'Go to Home', icon: 'home', run: () => showView('home') },
       { label: 'Go to Charts', icon: 'chart', run: () => showView('charts') },
+      { label: 'Go to Most Streamed', icon: 'wave', keywords: ['streams', 'all-time'], run: () => showView('streamed') },
       { label: 'Go to Lists', icon: 'stack', run: () => showView('lists') },
       { label: 'Go to Recommendations', icon: 'disc', keywords: ['for you', 'suggestions'], run: () => showView('recs') },
       { label: 'Go to Profile', icon: 'user', run: () => showView('profile') },
       { label: 'New list', icon: 'plus', run: () => openNewList() },
-      ...[G.ALL, ...G.GENRES].map((g) => ({ label: `${g.label} chart`, icon: 'chart', keywords: ['chart', g.key], run: () => { genre = g.key; renderGenreStrip(); chartsLoaded = true; showView('charts'); loadCharts(); } })),
+      ...[G.ALL, ...G.GENRES].map((g) => ({ label: `${g.label} chart`, icon: 'chart', keywords: ['chart', g.key], run: () => { genre = g.key; renderGenreStrip(); showView('charts'); ensureChart('charts'); } })),
+      { label: 'Refresh recommendations', icon: 'refresh', run: () => { showView('recs'); loadRecs({ refresh: true }); } },
       { label: 'Share my Top 10', icon: 'share', run: () => openShare() },
-      ...(amConnected() ? [] : [{ label: 'Connect Apple Music', icon: 'note', run: amConnect }]),
       ...(sync.server && !sync.user ? [{ label: 'Create account', icon: 'user', run: () => openAuth('signup') }, { label: 'Sign in', icon: 'user', run: () => openAuth('login') }] : []),
     ],
   });
 
   // =====================================================================
-  // Storefront, import / export
+  // Country, import
   // =====================================================================
   const COUNTRIES = { us: 'US', gb: 'UK', ca: 'CA', au: 'AU', ie: 'IE', nz: 'NZ', de: 'DE', fr: 'FR', es: 'ES', it: 'IT', nl: 'NL', se: 'SE', br: 'BR', mx: 'MX', jp: 'JP', kr: 'KR', in: 'IN', ng: 'NG', za: 'ZA' };
   const sel = $('#country');
   sel.innerHTML = Object.entries(COUNTRIES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
-  sel.onchange = () => { state.country = sel.value; save(); trending = []; loadTrending(); if (activeView === 'charts') loadCharts(); else chartsLoaded = false; runSearch(); };
+  sel.onchange = () => { state.country = sel.value; save(); trending = []; loadTrending(); ensureChart(activeView); runSearch(); };
   $('#import-file').onchange = async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
@@ -1950,7 +1583,6 @@
     renderResults();
     renderTrending();
     renderTopShelf();
-    renderRecent();
     renderRatings();
     renderCrates();
     renderProfile();
@@ -1961,7 +1593,7 @@
   }
 
   // =====================================================================
-  // Waking-up banner (Render's free plan sleeps when idle) + connect
+  // Waking-up banner (Render's free plan sleeps when idle) + server check
   // =====================================================================
   function showWake(kind) {
     const w = $('#wake');
@@ -1969,58 +1601,34 @@
     w.innerHTML = kind === 'waking'
       ? '<span class="vinyl"><span class="lbl"></span></span><div><b>Waking up Encore’s server</b><span>Free hosting naps when it’s quiet. This can take up to a minute. Keep browsing.</span></div>'
       : '<div><b>Can’t reach Encore’s server</b><span>Keep rating. Everything is saved on this device and syncs when the server is back.</span></div><button class="btn sm" id="wake-retry">Retry</button>';
-    if (kind !== 'waking') $('#wake-retry').onclick = () => { w.hidden = true; connect(); };
+    if (kind !== 'waking') $('#wake-retry').onclick = () => { w.hidden = true; checkServer(); };
     w.hidden = false;
   }
-  async function connect() {
+  async function checkServer() {
     const wakeTimer = setTimeout(() => showWake('waking'), 1200);
     let r = null;
     try { r = await api('/api/me', { timeout: 75000 }); } catch (_) { r = null; }
     clearTimeout(wakeTimer);
+    serverKnown = true;
     const wasWaking = !$('#wake').hidden;
     $('#wake').hidden = true;
     if (r && r.json && r.ok && 'user' in r.data) {
       sync.server = true; sync.awake = true;
-      const c = await api('/api/config').catch(() => null);
-      if (c && c.ok) sync.config = c.data;
       if (r.data.user) { const note = signedIn(r.data.user, r.data); if (note) toast(note); }
       else if (sync.user) signedOut();
-      if (wasWaking) toast('Connected');
+      if (wasWaking) toast('Back online');
       renderAll();
+      // A chart opened before the server answered came from the browser-only sources: reload it.
+      chartShown.current = chartShown.streamed = '';
+      ensureChart(activeView);
       const u = new URLSearchParams(location.search).get('u');
       if (u) openUser(u);
-      await afterServices();
       return;
     }
-    if (r && !r.json) { sync.server = false; afterServices(); renderAll(); return; } // static hosting: guest mode
+    if (r && !r.json) { sync.server = false; renderAll(); ensureChart(activeView); return; } // static hosting: guest mode
     if (sync.user || readJSON(LAST_USER)) { sync.server = true; showWake('error'); renderAll(); }
-    afterServices();
+    ensureChart(activeView);
   }
-  /** Finish a Spotify sign-in, reconnect Apple Music if it was linked, then load listening history. */
-  let servicesReady = false;
-  async function afterServices() {
-    if (servicesReady) return;
-    servicesReady = true;
-    const params = new URLSearchParams(location.search);
-    if (params.get('connected') || params.get('svc_error')) {
-      const k = params.get('connected') || params.get('svc');
-      history.replaceState(null, '', location.pathname + '#profile');
-      if (params.get('connected')) toast(`${svcName(k)} connected`);
-      else toast(params.get('svc_error'));
-      setTimeout(() => showView('profile'), 0);
-    }
-    await loadConnections();
-    try {
-      if (await Services.Spotify.handleRedirect()) {
-        state.connections.spotify = { connectedAt: Date.now(), name: Services.Spotify.profile() };
-        save(); toast('Spotify connected');
-      }
-    } catch (err) { toast(err.message); }
-    try { if (localStorage.getItem(AM_FLAG) && amPossible()) await amInit(); } catch (_) { /* stays disconnected */ }
-    renderAll();
-    loadRecent();
-  }
-
   // =====================================================================
   // Boot
   // =====================================================================
@@ -2029,7 +1637,6 @@
   Charts.init({ server: () => sync.server && sync.awake, country: () => state.country, config: CFG });
   bindList($('#results'), (id) => lastResults.find((s) => s.id === id) || state.songs[id]);
   bindList($('#trending'), (id) => trending.find((s) => s.id === id) || state.songs[id]);
-  bindList($('#recent'), (id) => recentSongs.find((s) => s.id === id) || state.songs[id]);
   bindList($('#chart-current'), (id) => chartSongs.find((s) => s.id === id) || state.songs[id]);
   bindList($('#chart-streamed'), (id) => chartSongs.find((s) => s.id === id) || state.songs[id]);
   bindList($('#ratings'), (id) => state.songs[id]);
@@ -2057,7 +1664,12 @@
     if (TABS.includes(h)) showView(h);
     loadTrending();
     refreshSongMeta();
-    if (location.protocol.startsWith('http')) connect(); else afterServices();
+    // Leftovers from the old service connections: tokens and looked-up songs.
+    ['encore.am', 'encore.foundSongs', 'encore.spotify', 'encore.spotify.pending'].forEach(removeKey);
+    if (location.protocol.startsWith('http')) {
+      checkServer();
+      setTimeout(() => { if (!serverKnown) { serverKnown = true; ensureChart(activeView); } }, 3500); // a sleeping server: don't wait for it
+    }
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
   })();
 })();
