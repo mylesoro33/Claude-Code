@@ -1,7 +1,7 @@
 // End-to-end test: a real Encore server (in-process, temp DB) whose outbound
-// requests go to a fake internet (Apple/Deezer/Kworb/Last.fm charts, Spotify
-// OAuth + Web API), plus browser-side mocks for Apple's catalog, artwork,
-// previews and MusicKit. Phone (390px) and desktop (1280px); saves screenshots.
+// requests go to a fake internet (Apple/Deezer/Kworb/Last.fm chart sources),
+// plus browser-side mocks for the iTunes catalog, artwork and previews.
+// Phone (390px) and desktop (1280px); saves screenshots.
 // Usage: node tests/e2e.js [screenshotDir]
 const { chromium } = require('playwright');
 const { createApp } = require('../server.js');
@@ -27,8 +27,13 @@ const itunes = (n, a, al, g, i, id) => ({
   previewUrl: `https://audio-ssl.itunes.apple.com/mock/${i}.m4a`, trackViewUrl: 'https://music.apple.com/', trackExplicitness: 'none',
 });
 const songs = rows.map(([n, a, al, g], i) => itunes(n, a, al, g, i, 1000 + i));
+// A deeper catalog (ids 1100+) so recommendations have more than one batch.
+const EXTRA = 24;
+for (let i = 0; i < EXTRA; i++) { const [, a, al, g] = rows[i % rows.length]; songs.push(itunes(`Deep Cut ${i + 1}`, a, al, g, i % rows.length, 1100 + i)); }
 const byId = (id) => songs.find((s) => s.trackId === id);
 const taste = { 1000: 3, 1001: 9, 1002: 1, 1003: 7, 1004: 5, 1005: 8, 1006: 2, 1007: 6, 1008: 4, 1009: 4 };
+for (let i = 0; i < EXTRA; i++) taste[1100 + i] = 0.5 + ((i * 7) % 10);
+const appSong = (id) => { const s = byId(id); return { id: String(id), title: s.trackName, artist: s.artistName, album: s.collectionName, art: s.artworkUrl100, preview: s.previewUrl, genre: s.primaryGenreName, year: '2025' }; };
 const ARTIST_GENRE = { 'nova lane': ['pop'], 'kite club': ['pop', 'indie pop'], mira: ['rnb', 'soul'], 'the oaks': ['rock'], 'mc static': ['hip-hop', 'rap'], 'dusty roads': ['country'] };
 
 function wav(seconds = 4, rate = 22050) {
@@ -58,13 +63,12 @@ async function makeCovers(browser) {
   return covers;
 }
 
-/** The server's view of the internet: charts sources, Last.fm, Spotify. Records calls. */
+/** The server's view of the internet: chart sources and Last.fm. Records calls. */
 function serverWeb() {
   const calls = [];
   const res = (body, status = 200) => ({ ok: status < 400, status, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) });
   const feed = (ids) => ({ feed: { entry: ids.map((id) => { const s = byId(id); return { 'im:name': { label: s.trackName }, 'im:artist': { label: s.artistName }, 'im:image': [{ label: s.artworkUrl100 }], id: { attributes: { 'im:id': String(id) } }, category: { attributes: { label: s.primaryGenreName } } }; }) } });
   const kworbRow = (id, streams) => `<tr><td class="text"><div><a href="#">${byId(id).artistName}</a> - <a href="#">${byId(id).trackName}</a></div></td><td>${streams.toLocaleString('en-US')}</td><td>1</td></tr>`;
-  const spTrack = (id) => ({ id: 'sp' + id, name: byId(id).trackName, artists: [{ name: byId(id).artistName }], album: { name: byId(id).collectionName, images: [] } });
   async function fetch(url, opts = {}) {
     const u = new URL(url);
     calls.push({ method: opts.method || 'GET', host: u.host, path: u.pathname, query: Object.fromEntries(u.searchParams), body: opts.body });
@@ -82,27 +86,14 @@ function serverWeb() {
     if (u.host === 'ws.audioscrobbler.com') {
       const m = u.searchParams.get('method');
       if (m === 'artist.gettoptags') return res({ toptags: { tag: (ARTIST_GENRE[(u.searchParams.get('artist') || '').toLowerCase()] || []).map((name) => ({ name })) } });
-      if (m === 'user.getrecenttracks') return res(u.searchParams.get('user') === 'nobody' ? { error: 6, message: 'User not found' } : { recenttracks: { track: [{ name: 'Saltwater', artist: { '#text': 'The Oaks' } }, { name: 'Static', artist: { '#text': 'Nova Lane' } }] } });
-      if (m === 'user.gettoptracks') return res({ toptracks: { track: [] } });
       return res({ tracks: { track: [] } });
-    }
-    if (u.host === 'accounts.spotify.com' && u.pathname === '/api/token') return res({ access_token: 'sp-access', refresh_token: 'sp-refresh', expires_in: 3600 });
-    if (u.host === 'api.spotify.com') {
-      const p = u.pathname;
-      if (p === '/v1/me') return res({ id: 'maya_sp', display_name: 'Maya on Spotify' });
-      if (p === '/v1/me/player/recently-played') return res({ items: [{ track: spTrack(1007) }, { track: spTrack(1009) }] });
-      if (p === '/v1/search') { const q = (u.searchParams.get('q') || '').toLowerCase(); const s = songs.find((x) => q.includes(x.trackName.toLowerCase().slice(0, 10))); return res({ tracks: { items: s ? [spTrack(s.trackId)] : [] } }); }
-      if (p === '/v1/me/tracks') return res('', 200);
-      if (p === '/v1/me/playlists') return res({ items: [{ id: 'pl1', name: 'Gym Mix', owner: { id: 'maya_sp' }, tracks: { total: 12 } }] });
-      if (p === '/v1/users/maya_sp/playlists') return res({ id: 'pl2', name: JSON.parse(opts.body).name }, 201);
-      if (/^\/v1\/playlists\/pl\d\/tracks$/.test(p)) return res({ snapshot_id: 'x' }, 201);
     }
     return res({ error: 'unmocked ' + url }, 404);
   }
   return { fetch, calls };
 }
 
-async function mockBrowser(page, covers, appleCalls = []) {
+async function mockBrowser(page, covers) {
   page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); process.exitCode = 1; });
   const cors = { 'Access-Control-Allow-Origin': '*' };
   const search = (term) => {
@@ -126,37 +117,6 @@ async function mockBrowser(page, covers, appleCalls = []) {
   await page.route('https://is1-ssl.mzstatic.com/**', (r) => serveArt(r, r.request().url()));
   await page.route((u) => u.pathname === '/api/art', (r) => serveArt(r, new URL(r.request().url()).searchParams.get('u') || ''));
   await page.route('https://audio-ssl.itunes.apple.com/**', (r) => r.fulfill({ body: AUDIO, contentType: 'audio/wav', headers: cors }));
-  await page.route('**/api/apple/developer-token', (r) => r.fulfill({ json: { token: 'test-developer-token' } }));
-  // The test server has no Apple key; report Apple Music as set up (the token route above stands in for it).
-  await page.route((u) => u.pathname === '/api/config', async (r) => { const resp = await r.fetch(); const j = await resp.json(); r.fulfill({ json: { ...j, appleMusic: true } }); });
-  // Spotify's consent screen: let Encore start the sign-in, then "approve" and go straight to the callback.
-  await page.route((u) => u.pathname === '/auth/spotify/start', async (r) => {
-    const resp = await r.fetch({ maxRedirects: 0 });
-    const auth = new URL(resp.headers().location);
-    const headers = { Location: `${auth.searchParams.get('redirect_uri')}?code=approved&state=${auth.searchParams.get('state')}` };
-    if (resp.headers()['set-cookie']) headers['Set-Cookie'] = resp.headers()['set-cookie'];
-    r.fulfill({ status: 302, headers });
-  });
-  await page.route('https://api.music.apple.com/**', (r) => {
-    const req = r.request();
-    const u = new URL(req.url());
-    appleCalls.push(`${req.method()} ${u.pathname}${u.search}`);
-    if (u.pathname === '/v1/me/recent/played/tracks') {
-      const data = [1001, 1005].map((id) => ({ id: String(id), type: 'songs', attributes: { name: byId(id).trackName, artistName: byId(id).artistName, albumName: byId(id).collectionName, genreNames: [byId(id).primaryGenreName], artwork: { url: byId(id).artworkUrl100.replace('100x100bb', '{w}x{h}bb') }, previews: [{ url: byId(id).previewUrl }] } }));
-      return r.fulfill({ json: { data }, headers: cors });
-    }
-    if (u.pathname === '/v1/me/library/playlists' && req.method() === 'GET') return r.fulfill({ json: { data: [{ id: 'p.am1', attributes: { name: 'Late Night', canEdit: true } }] }, headers: cors });
-    if (u.pathname === '/v1/me/library/playlists' && req.method() === 'POST') return r.fulfill({ status: 201, json: { data: [{ id: 'p.am2' }] }, headers: cors });
-    return r.fulfill({ status: 202, body: '', headers: cors });
-  });
-  await page.addInitScript(() => {
-    // Like real MusicKit, the sign-in survives a page reload.
-    const was = localStorage.getItem('mk-test-auth') === '1';
-    const music = { isAuthorized: was, musicUserToken: was ? 'user-token' : '', storefrontId: 'us', playbackState: 0, currentPlaybackProgress: 0,
-      async authorize() { await new Promise((res) => setTimeout(res, 120)); this.isAuthorized = true; this.musicUserToken = 'user-token'; localStorage.setItem('mk-test-auth', '1'); return 'user-token'; },
-      async unauthorize() { this.isAuthorized = false; localStorage.removeItem('mk-test-auth'); }, addEventListener() {}, async setQueue() { throw new Error('preview only in tests'); }, stop() {}, pause() {}, play() {} };
-    window.MusicKit = { configure: async () => music, PlaybackStates: { playing: 2, paused: 3, completed: 10, ended: 5 } };
-  });
 }
 
 const check = (label, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`); if (!ok) process.exitCode = 1; };
@@ -177,36 +137,64 @@ async function rateVia(page, rowSel) {
   }
   await page.waitForSelector('[data-done="close"]');
 }
-const toastText = (p) => p.locator('#toast').innerText();
+/** Another listener, made through the API: similar taste to the test user, plus their own favourites. */
+async function seedListener(base, name, order) {
+  const r = await fetch(base + 'api/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: name + '@example.com', username: name, password: 'listening1' }) });
+  const cookie = r.headers.get('set-cookie').split(';')[0];
+  const state = { order: order.map(String), songs: Object.fromEntries(order.map((id) => [String(id), appSong(id)])), lists: [] };
+  await fetch(base + 'api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ state }) });
+}
+const recIds = (p) => p.$$eval('#recs .rec', (els) => els.map((e) => e.dataset.id));
+const NO_SERVICES = /Apple Music|Spotify|YouTube|SoundCloud|Amazon|Connect|Recently played|Find my account|Last\.fm/i;
 
 async function main() {
   const web = serverWeb();
-  const env = { TOKEN_ENCRYPTION_KEY: 'e'.repeat(64), SPOTIFY_CLIENT_ID: 'sp-id', SPOTIFY_CLIENT_SECRET: 'sp-secret', LASTFM_API_KEY: 'lf', KWORB_ENABLED: '1' };
+  const env = { LASTFM_API_KEY: 'lf', KWORB_ENABLED: '1' };
   const server = createApp({ dbPath: ':memory:', env, fetch: web.fetch, log: () => {}, chartOptions: { rpm: {} } });
   await new Promise((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${server.address().port}/`;
-  env.APP_URL = base.slice(0, -1);
+  // Four listeners who agree with the test user on 1001 > 1005 > 1003 and love different deep cuts.
+  for (let n = 0; n < 4; n++) {
+    const x = (k) => 1100 + n * 5 + k;
+    await seedListener(base, `listener${n}`, [1001, x(0), x(1), x(2), 1005, x(3), x(4), 1000 + n, 1003, 1002, 1006, 1100 + 20 + n]);
+  }
   const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
   const covers = await makeCovers(browser);
   const phone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, serviceWorkers: 'block' };
   try {
     const ctx = await browser.newContext(phone);
     const p = await ctx.newPage();
-    const appleCalls = [];
-    await mockBrowser(p, covers, appleCalls);
+    await mockBrowser(p, covers);
     await p.goto(base);
     await p.waitForSelector('#trending li.row');
-    check('Search (⌘K) button and Export are gone', (await p.locator('#palette-btn').count()) === 0);
 
-    // A few ratings first.
+    // Navigation: six tabs, Charts and Most Streamed separate.
+    const tabs = await p.$$eval('.tab', (ts) => ts.map((t) => t.innerText.replace(/\s+/g, ' ').replace(/­/g, '').trim()));
+    check('Six tabs: Home, Charts, Most Streamed, Lists, Recommendations, Profile', tabs.join('|').toLowerCase() === 'home|charts|most streamed|lists|recommendations|profile');
+    check('No horizontal overflow with six tabs (390px)', await noOverflow(p));
+
+    // Search: neutral placeholder, no service branding.
+    check('Search placeholder is "Search songs, artists, or albums"', (await p.getAttribute('#search', 'placeholder')) === 'Search songs, artists, or albums');
+    check('Home has no Recently played and no service names', !NO_SERVICES.test(await p.locator('#view-home').innerText()));
     await p.fill('#search', 'all');
     await p.waitForSelector('#results li.row[data-id="1001"]');
+    check('Search results carry no service branding', !NO_SERVICES.test(await p.locator('#search-results').innerText()));
+    await p.screenshot({ path: `${out}/01-home-search.png` });
     for (const id of [1001, 1005, 1003]) { await rateVia(p, `#results li.row[data-id="${id}"] .rate-btn`); await closeSheet(p); }
+    await p.locator('#results li.row[data-id="1007"] .meta').click();
+    await p.waitForSelector('#sheet [data-detail="rate"]');
+    const detail = await p.locator('#sheet').innerText();
+    check('Song detail: Rate and Add to list, no favorite/playlist/service buttons', /Add to list/.test(detail) && !/Favorite|playlist|Apple Music/i.test(detail));
+    await p.keyboard.press('Escape');
+    await p.waitForSelector('#sheet', { state: 'hidden' });
     await p.fill('#search', '');
 
-    // Sign up (with a unique username), then the default vinyl avatar.
+    // Sign up with a unique username; default vinyl avatar.
     await p.click('#me-btn');
     await p.fill('#auth-form [name=email]', 'maya@example.com');
+    await p.fill('#auth-form [name=username]', 'listener0');
+    await p.waitForFunction(() => /taken/.test(document.querySelector('#u-hint').textContent));
+    check('Sign-up says when a username is taken', true);
     await p.fill('#auth-form [name=username]', 'maya');
     await p.waitForFunction(() => /available/.test(document.querySelector('#u-hint').textContent));
     await p.fill('#auth-form [name=password]', 'correct horse');
@@ -215,148 +203,128 @@ async function main() {
     await p.click('.tab[data-view="profile"]');
     await settle(p, 500);
     check('No photo yet → default vinyl-record avatar', (await p.locator('.profile-card .avatar.xl.vinyl-av').count()) === 1);
-    check('Export button removed from Profile', (await p.locator('[data-p="export"]').count()) === 0);
+    check('Profile has no connections, Find my account or service names', !NO_SERVICES.test(await p.locator('#profile').innerText()) && (await p.locator('#connect-settings, #lookup-form, [data-svc]').count()) === 0);
 
-    // Connect settings: five services, every one with a Connect button (none "Coming soon").
-    const svcRows = await p.$$eval('#connect-settings .services li', (ls) => ls.map((l) => l.innerText.replace(/\s+/g, ' ')));
-    check('Connect settings list all five services', svcRows.length === 5 && /Apple Music/.test(svcRows[0]) && /Spotify/.test(svcRows[1]) && /YouTube Music/.test(svcRows[2]) && /SoundCloud/.test(svcRows[3]) && /Amazon Music/.test(svcRows[4]));
-    check('No "Coming soon" anywhere', !(await p.locator('#profile').innerText()).match(/coming soon/i));
-    check('Every service has a Connect button', (await p.locator('#connect-settings .services li').filter({ hasText: /Connect/ }).count()) === 5);
-    check('Unconfigured services name the exact env vars they need', /SOUNDCLOUD_CLIENT_ID/.test(svcRows[3]) && /GOOGLE_CLIENT_ID/.test(svcRows[2]));
-    await p.locator('#connect-settings').evaluate((e) => e.scrollIntoView({ block: 'start' }));
-    await settle(p, 300);
-    await p.screenshot({ path: `${out}/01-connect-settings.png` });
-
-    // Apple Music (MusicKit) + Spotify (real OAuth round-trip through the server).
-    await p.click('[data-svc="apple-on"]');
-    await p.waitForFunction(() => /Apple Music connected/.test(document.querySelector('#toast').textContent));
-    await Promise.all([p.waitForURL(/#profile$/), p.locator('#connect-settings a[href="/auth/spotify/start"]').click()]);
-    await p.waitForFunction(() => /Spotify connected/.test(document.querySelector('#toast').textContent));
-    await settle(p, 800);
-    check('Spotify connects through OAuth and shows the account', /Connected as Maya on Spotify/.test(await p.locator('[data-svc-row="spotify"]').innerText()));
-    check('Server exchanged the code with PKCE and the secret (server-side)', web.calls.some((c) => c.host === 'accounts.spotify.com' && /code_verifier=/.test(c.body || '')));
-    await p.screenshot({ path: `${out}/02-connected.png` });
-
-    // Home: recently played from both services.
-    await p.click('.tab[data-view="home"]');
-    await p.waitForFunction(() => /Apple Music/.test(document.querySelector('#recent-source').textContent) && /Spotify/.test(document.querySelector('#recent-source').textContent));
-    await settle(p, 600);
-    const recent = await p.$$eval('#recent li.row', (ls) => ls.map((l) => l.dataset.id));
-    check('Home shows recent plays from Apple Music and Spotify', recent.includes('1001') && recent.includes('1007') && recent.includes('1009'));
-    await p.screenshot({ path: `${out}/03-home-recent.png` });
-
-    // ❤ favorite → Apple Music library + Spotify Liked Songs.
-    await p.locator('#recent li.row[data-id="1007"] .meta').click();
-    await p.click('[data-detail="fav"]');
-    await p.waitForFunction(() => /Saved to/.test(document.querySelector('#toast').textContent));
-    const favMsg = await toastText(p);
-    check('Favorite saves to Apple Music and Spotify', /Saved to Apple Music and Spotify/.test(favMsg) && !/error|Failed/i.test(favMsg));
-    check('…via Apple’s library API and Spotify’s Saved Tracks', appleCalls.some((c) => /POST \/v1\/me\/library\?ids\[songs\]=1007/.test(decodeURIComponent(c))) && web.calls.some((c) => c.host === 'api.spotify.com' && c.method === 'PUT' && c.path === '/v1/me/tracks' && c.query.ids === 'sp1007'));
-    await p.screenshot({ path: `${out}/04-favorited.png` });
-
-    // Add to playlist: pick a service, pick a playlist, or make a new one.
-    await p.click('[data-detail="playlist"]');
-    await p.waitForSelector('#pl-list [data-pl]');
-    check('Playlist picker offers each connected service', (await p.$$eval('#pl-strip button', (b) => b.map((x) => x.textContent))).join() === 'Apple Music,Spotify');
-    await p.click('#pl-strip [data-t="spotify"]');
-    await p.waitForSelector('#pl-list [data-pl="pl1"]');
-    await p.screenshot({ path: `${out}/05-add-to-playlist.png` });
-    await p.click('#pl-list [data-pl="pl1"]');
-    await p.waitForFunction(() => /Added to “Gym Mix” on Spotify/.test(document.querySelector('#toast').textContent));
-    check('Added to an existing Spotify playlist', web.calls.some((c) => c.path === '/v1/playlists/pl1/tracks'));
-    await p.fill('#pl-new [name=name]', 'Encore Picks');
-    await p.click('#pl-new button');
-    await p.waitForFunction(() => /Created “Encore Picks” on Spotify/.test(document.querySelector('#toast').textContent));
-    check('Created a new Spotify playlist with the song', web.calls.some((c) => c.path === '/v1/users/maya_sp/playlists') && web.calls.some((c) => c.path === '/v1/playlists/pl2/tracks'));
-    await p.keyboard.press('Escape');
-    await p.waitForSelector('#sheet', { state: 'hidden' });
-
-    // Find my account (connector fallback): Last.fm username.
-    await p.click('.tab[data-view="profile"]');
-    await p.selectOption('#lookup-form [name=service]', 'lastfm');
-    await p.fill('#lookup-form [name=input]', 'nobody');
-    await p.click('#lookup-form button');
-    await p.waitForSelector('#lookup-error:not([hidden])');
-    check('Find my account explains a missing profile', /not found/i.test(await p.locator('#lookup-error').innerText()));
-    await p.fill('#lookup-form [name=input]', 'https://www.last.fm/user/vinylhead');
-    await p.click('#lookup-form button');
-    await p.waitForSelector('#found-list li.row');
-    const found = await p.$$eval('#found-list li.row', (ls) => ls.map((l) => l.dataset.id));
-    check('Find my account pulls public recent songs, ready to rate', found.join() === '1006,1002' && (await p.locator('#found-list .rate-btn').count()) === 2);
-    await p.locator('.find-account').evaluate((e) => e.scrollIntoView({ block: 'start' }));
-    await settle(p, 300);
-    await p.screenshot({ path: `${out}/06-find-my-account.png` });
-
-    // Charts: real per-genre data, one genre per song, weeks/peak and stream counts.
+    // Charts tab: current rankings only, unique per genre, Rate + Add to list on every row.
     await p.click('.tab[data-view="charts"]');
     await p.waitForSelector('#chart-current li.row');
     await settle(p, 700);
-    check('Charts open on All genres', (await p.locator('#genre-strip button.active').innerText()) === 'All genres');
-    const allTitles = await p.$$eval('#chart-current li.row', (ls) => ls.map((l) => l.dataset.id));
-    check('All-genres chart is the overall chart (not de-duplicated)', allTitles.slice(0, 3).join() === '1001,1008,1007');
-    await p.screenshot({ path: `${out}/07-charts-all.png` });
-    const ids = {};
+    check('Charts tab opens on All genres', (await p.locator('#genre-strip button.active').innerText()) === 'All genres');
+    check('Charts tab holds only the current chart (Most Streamed is its own tab)', (await p.locator('#view-charts #chart-streamed').count()) === 0 && (await p.locator('#view-streamed #chart-streamed').count()) === 1);
+    check('All-genres chart is the overall chart', (await p.$$eval('#chart-current li.row', (ls) => ls.map((l) => l.dataset.id))).slice(0, 3).join() === '1001,1008,1007');
+    await p.screenshot({ path: `${out}/02-charts-all.png` });
+    const everyRowActs = (sel) => p.$$eval(sel, (ls) => ls.length > 0 && ls.every((l) => l.querySelector('.rate-btn, [data-act="open"] .sticker, .icon-btn .sticker') && l.querySelector('.add-list')));
+    const cur = {};
     for (const g of ['pop', 'hiphop', 'rnb', 'country', 'rock']) {
       await p.click(`#genre-strip [data-genre="${g}"]`);
       await p.waitForFunction(() => document.querySelectorAll('#chart-current li.row').length > 0 || document.querySelector('#chart-current-state').textContent);
       await settle(p, 300);
-      ids[g] = await p.$$eval('#chart-current li.row', (ls) => ls.map((l) => l.dataset.id));
+      cur[g] = await p.$$eval('#chart-current li.row', (ls) => ls.map((l) => l.dataset.id));
+      if (g === 'pop') check('Every Charts row has Rate and Add to list', await everyRowActs('#chart-current li.row'));
     }
-    const flat = Object.values(ids).flat();
-    check('Each genre chart is different and no song repeats across genres', new Set(flat).size === flat.length && ids.pop.join() !== ids.hiphop.join());
-    check('Songs sit under their primary artist’s genre (Low Tide → R&B, Cypher → Hip-Hop, Neon Rain → Pop)', !ids.pop.includes('1004') && ids.rnb.includes('1004') && ids.hiphop.join() === '1008' && ids.pop.includes('1005'));
+    const flat = Object.values(cur).flat();
+    check('Charts: no song repeats across genres', new Set(flat).size === flat.length && cur.pop.join() !== cur.hiphop.join());
+    check('Songs sit under their primary artist’s genre (Low Tide → R&B, Cypher → Hip-Hop)', !cur.pop.includes('1004') && cur.rnb.includes('1004') && cur.hiphop.join() === '1008');
     await p.click('#genre-strip [data-genre="pop"]');
     await p.waitForSelector('#chart-current li.row');
     await settle(p, 500);
     check('Rows show weeks on chart and peak; header shows source and last updated', /wk.* on chart · peak #1|New this week · peak #1/.test(await p.locator('#chart-current li.row').first().innerText()) && /updated/i.test(await p.locator('#current-source').innerText()));
-    check('Most Streamed shows real stream counts', /3\.1B Spotify streams/.test(await p.locator('#chart-streamed').innerText()));
-    check('No horizontal overflow (Charts)', await noOverflow(p));
-    await p.screenshot({ path: `${out}/08-charts-pop.png` });
-    await p.click('#genre-strip [data-genre="hiphop"]');
-    await p.waitForSelector('#chart-streamed li.row');
-    await settle(p, 400);
-    await p.screenshot({ path: `${out}/09-charts-hiphop.png` });
+    await p.screenshot({ path: `${out}/03-charts-pop.png` });
 
-    // Profile: change username (unique), crop a profile photo.
+    // Most Streamed tab: same genre selector (keeps the genre), stream counts, unique per genre.
+    await p.click('.tab[data-view="streamed"]');
+    await p.waitForSelector('#chart-streamed li.row');
+    await settle(p, 500);
+    check('Most Streamed opens on the genre picked on Charts', (await p.locator('#streamed-strip button.active').innerText()) === 'Pop');
+    check('Most Streamed rows show stream counts', /3\.1B Spotify streams/.test(await p.locator('#chart-streamed').innerText()));
+    check('Every Most Streamed row has Rate and Add to list', await everyRowActs('#chart-streamed li.row'));
+    await p.screenshot({ path: `${out}/04-most-streamed.png` });
+    const str = {};
+    for (const g of ['pop', 'hiphop', 'rnb', 'country', 'rock']) {
+      await p.click(`#streamed-strip [data-genre="${g}"]`);
+      await p.waitForFunction(() => document.querySelectorAll('#chart-streamed li.row').length > 0 || document.querySelector('#chart-streamed-state').textContent || document.querySelector('#streamed-note').textContent);
+      await settle(p, 300);
+      str[g] = await p.$$eval('#chart-streamed li.row', (ls) => ls.map((l) => l.dataset.id));
+    }
+    const sflat = Object.values(str).flat();
+    check('Most Streamed: no song repeats across genres', sflat.length > 2 && new Set(sflat).size === sflat.length);
+    check('No horizontal overflow (Most Streamed)', await noOverflow(p));
+
+    // Recommendations: Refresh, live updates as you rate, never rated songs.
+    await p.click('.tab[data-view="recs"]');
+    await p.waitForSelector('#recs .rec');
+    await settle(p, 800);
+    const rated = () => p.evaluate(() => [...document.querySelectorAll('#ratings li.row')].map((l) => l.dataset.id));
+    const first = await recIds(p);
+    check('Recommendations show a batch with a visible Refresh button', first.length >= 8 && await p.locator('#recs-refresh').isVisible());
+    check('Recommendations never include rated songs', first.every((id) => !['1001', '1005', '1003'].includes(id)));
+    await p.screenshot({ path: `${out}/05-recs.png` });
+    const target = first[0];
+    await rateVia(p, `#recs .rec[data-id="${target}"] [data-act="rate"]`);
+    await closeSheet(p);
+    await p.waitForFunction(() => /Updated for your rating of/.test(document.querySelector('#recs-updated').textContent));
+    const afterRate = await recIds(p);
+    check('Rating a song updates the picks immediately, no reload or Refresh', !afterRate.includes(target) && afterRate.length >= 8);
+    check('…with a visible update cue (pulse + new card highlight)', (await p.locator('#recs-updated.pulse').count()) === 1 && (await p.locator('#recs .rec.rec-new').count()) >= 1);
+    await p.screenshot({ path: `${out}/06-recs-updated.png` });
+    await p.click('#recs-refresh');
+    await p.waitForFunction(() => /New batch|seen every pick/.test(document.querySelector('#recs-updated').textContent));
+    const batch2 = await recIds(p);
+    check('Refresh pulls a new batch', batch2.length > 0 && batch2.filter((id) => afterRate.includes(id)).length < batch2.length / 2);
+    await p.click('.tab[data-view="lists"]');
+    await settle(p, 300);
+    const mine = await rated();
+    check('…and the new batch has no rated songs', batch2.every((id) => !mine.includes(id)) && mine.includes(target));
+    await p.click('.tab[data-view="recs"]');
+
+    // Profile: change username (still unique), crop with a live preview, avatar everywhere.
     await p.click('.tab[data-view="profile"]');
     await p.click('[data-p="edit"]');
-    await p.fill('#edit-form [name=username]', 'listener_x');
+    await p.fill('#edit-form [name=username]', 'listener1');
+    await p.waitForFunction(() => /taken/.test(document.querySelector('#edit-u-hint').textContent));
     await p.fill('#edit-form [name=username]', 'maya_v');
     await p.waitForFunction(() => /available/.test(document.querySelector('#edit-u-hint').textContent));
     await p.click('#edit-form button');
     await p.waitForFunction(() => /@maya_v/.test(document.querySelector('#profile').textContent));
-    check('Username can be changed later', true);
+    check('Username can be changed later and must stay unique', true);
     await p.setInputFiles('#avatar-file', { name: 'me.png', mimeType: 'image/png', buffer: covers[4] });
     await p.waitForSelector('#crop-canvas');
     const cv = await p.locator('#crop-canvas').boundingBox();
     await p.locator('#crop-zoom').fill('1.8');
     await p.mouse.move(cv.x + 140, cv.y + 140); await p.mouse.down(); await p.mouse.move(cv.x + 90, cv.y + 120, { steps: 6 }); await p.mouse.up();
     await settle(p, 300);
-    await p.screenshot({ path: `${out}/10-avatar-crop.png` });
+    const previewDrawn = await p.evaluate(() => { const c = document.querySelector('#crop-prev'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let sum = 0; for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2]; return sum > 0; });
+    check('Crop step shows a live preview before saving', previewDrawn && /@maya_v/.test(await p.locator('.crop-preview').innerText()));
+    await p.locator('.crop-preview').scrollIntoViewIfNeeded();
+    await p.screenshot({ path: `${out}/07-avatar-crop.png` });
     await p.click('#crop-save');
     await p.waitForSelector('.profile-card .avatar.xl img');
-    check('Cropped photo shows on the profile and next to lists/ratings', (await p.locator('.profile-card .avatar img').count()) === 1 && (await p.locator('#profile h2.owned .avatar img').count()) >= 1);
+    check('Photo shows on the profile and next to Top 10 / Lists', (await p.locator('.profile-card .avatar img').count()) === 1 && (await p.locator('#profile h2.owned .avatar img').count()) >= 1);
     check('No horizontal overflow (Profile)', await noOverflow(p));
-    await p.screenshot({ path: `${out}/11-profile.png` });
-    await p.screenshot({ path: `${out}/12-profile-full.png`, fullPage: true });
+    await p.screenshot({ path: `${out}/08-profile.png` });
     await p.click('.tab[data-view="lists"]');
     await settle(p, 500);
-    check('Ratings show the owner’s avatar', (await p.locator('#ratings-owner .avatar img').count()) === 1);
-    await p.screenshot({ path: `${out}/13-ratings.png` });
+    check('Ratings show the owner’s photo and @username', (await p.locator('#ratings-owner .avatar img').count()) === 1 && /@maya_v/.test(await p.locator('#ratings-owner').innerText()));
+    await p.click('#lists-strip [data-pane="mine"]');
+    await p.click('#new-list');
+    await p.fill('#new-list-form [name=name]', 'Gym Songs');
+    await p.click('#new-list-form button[type=submit]');
+    await p.waitForSelector('#list-detail .list-head');
+    check('Lists show the owner’s photo and @username', (await p.locator('#list-detail .avatar img').count()) === 1 && /by @maya_v/i.test(await p.locator('#list-detail').innerText()));
+    await p.screenshot({ path: `${out}/09-list.png` });
 
     // Desktop
     const d = await (await browser.newContext({ viewport: { width: 1280, height: 820 }, serviceWorkers: 'block' })).newPage();
     await mockBrowser(d, covers);
-    await d.goto(base + '#charts');
-    await d.click('#genre-strip [data-genre="rnb"]');
-    await d.waitForSelector('#chart-current li.row');
+    await d.goto(base + '#streamed');
+    await d.waitForSelector('#chart-streamed li.row');
     await settle(d, 700);
     check('No horizontal overflow at 1280px', await noOverflow(d));
-    check('Desktop rail has no search button', (await d.locator('.tabbar #palette-btn').count()) === 0);
-    await d.screenshot({ path: `${out}/20-desktop-charts.png` });
-    await d.click('.tab[data-view="profile"]');
-    await settle(d, 600);
-    await d.screenshot({ path: `${out}/21-desktop-profile.png` });
+    await d.screenshot({ path: `${out}/20-desktop-streamed.png` });
+    await d.click('.tab[data-view="charts"]');
+    await d.waitForSelector('#chart-current li.row');
+    await settle(d, 500);
+    await d.screenshot({ path: `${out}/21-desktop-charts.png` });
   } finally {
     await browser.close();
     server.close();
@@ -364,4 +332,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { mockBrowser, makeCovers, rateVia, songs, rows, taste, settle, serverWeb };
+module.exports = { mockBrowser, makeCovers, rateVia, songs, rows, taste, settle, serverWeb, closeSheet, check, noOverflow };
