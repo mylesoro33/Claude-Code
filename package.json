@@ -5,7 +5,7 @@
   "description": "Beli-style song ranking on the Apple Music catalog",
   "scripts": {
     "start": "node --no-warnings=ExperimentalWarning server.js",
-    "test": "node --no-warnings=ExperimentalWarning --test tests/ranking.test.js tests/server.test.js"
+    "test": "node --no-warnings=ExperimentalWarning --test tests/ranking.test.js tests/server.test.js tests/recommend.test.js"
   },
   "engines": { "node": ">=22.13" }
 }

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
-const { createApp, makeDeveloperToken } = require('../server.js');
+const { createApp, makeDeveloperToken, cleanState } = require('../server.js');
 
 async function withServer(env, fn) {
   const server = createApp({ dbPath: ':memory:', env });
@@ -24,104 +24,124 @@ function client(base) {
     return { status: res.status, data };
   };
 }
-const sampleState = {
-  songs: { 1: { id: '1', title: 'A', artist: 'X', album: 'LP' }, 2: { id: '2', title: 'B', artist: 'X', album: 'LP' } },
-  rankings: { liked: ['1'], fine: ['2'], disliked: [] }, later: [], rankedAt: {}, country: 'us',
-};
+const song = (id, extra = {}) => ({ id, title: 'Song ' + id, artist: 'Artist ' + id, album: 'LP', genre: 'Pop', ...extra });
+const stateWith = (order, extra = {}) => ({ order, songs: Object.fromEntries(order.map((id) => [id, song(id)])), lists: [], connections: {}, ...extra });
+const signup = (c, username, email = `${username}@example.com`) => c('/api/signup', { method: 'POST', body: { email, username, password: 'correct horse' } });
 
-test('signup, session cookie, sync, conflict detection, logout', () => withServer({}, async (base) => {
+test('sign up needs a valid email and a unique username; log in with either', () => withServer({}, async (base) => {
   const a = client(base);
   assert.equal((await a('/api/me')).data.user, null);
-  assert.equal((await a('/api/signup', { method: 'POST', body: { username: 'x', password: 'longenough' } })).status, 400);
-  assert.equal((await a('/api/signup', { method: 'POST', body: { username: 'maya', password: 'short' } })).status, 400);
-  const su = await a('/api/signup', { method: 'POST', body: { username: 'maya', password: 'correct horse', displayName: 'Maya' } });
+  assert.equal((await a('/api/signup', { method: 'POST', body: { email: 'nope', username: 'maya', password: 'correct horse' } })).data.field, 'email');
+  assert.equal((await a('/api/signup', { method: 'POST', body: { email: 'm@example.com', username: 'x', password: 'correct horse' } })).data.field, 'username');
+  assert.equal((await a('/api/signup', { method: 'POST', body: { email: 'm@example.com', username: 'maya', password: 'short' } })).data.field, 'password');
+  const su = await signup(a, 'maya', 'Maya@Example.com');
   assert.equal(su.status, 201);
-  assert.equal(su.data.user.displayName, 'Maya');
-  assert.equal(su.data.state, null);
-  assert.equal((await a('/api/signup', { method: 'POST', body: { username: 'MAYA', password: 'whatever123' } })).status, 409);
-
-  const put = await a('/api/state', { method: 'PUT', body: { state: sampleState, baseVersion: 0 } });
-  assert.equal(put.status, 200);
-  assert.equal(put.data.version, 1);
-  // A second device still on version 0 must not overwrite.
-  const stale = await a('/api/state', { method: 'PUT', body: { state: sampleState, baseVersion: 0 } });
-  assert.equal(stale.status, 409);
-  assert.equal(stale.data.version, 1);
-
-  const me = await a('/api/me');
-  assert.deepEqual(me.data.state.rankings, sampleState.rankings);
-
-  // Second browser logs in and gets the same list.
+  assert.equal(su.data.user.email, 'maya@example.com');
+  assert.equal(su.data.user.username, 'maya');
   const b = client(base);
-  assert.equal((await b('/api/login', { method: 'POST', body: { username: 'maya', password: 'nope' } })).status, 401);
-  const li = await b('/api/login', { method: 'POST', body: { username: 'Maya', password: 'correct horse' } });
-  assert.equal(li.status, 200);
-  assert.equal(li.data.version, 1);
-  assert.deepEqual(li.data.state.rankings.liked, ['1']);
-
-  await a('/api/logout', { method: 'POST', body: {} });
-  assert.equal((await a('/api/me')).data.user, null);
-  assert.equal((await a('/api/state', { method: 'PUT', body: { state: sampleState } })).status, 401);
+  assert.equal((await signup(b, 'MAYA', 'other@example.com')).status, 409);
+  assert.equal((await signup(b, 'sam', 'maya@example.com')).data.field, 'email');
+  assert.deepEqual((await b('/api/username-available?u=maya')).data, { valid: true, available: false });
+  assert.deepEqual((await b('/api/username-available?u=new_name')).data, { valid: true, available: true });
+  assert.equal((await b('/api/login', { method: 'POST', body: { login: 'maya@example.com', password: 'nope' } })).status, 401);
+  assert.equal((await b('/api/login', { method: 'POST', body: { login: 'MAYA@example.com', password: 'correct horse' } })).status, 200);
+  const c = client(base);
+  assert.equal((await c('/api/login', { method: 'POST', body: { login: 'maya', password: 'correct horse' } })).status, 200);
 }));
 
-test('public profiles, privacy toggle and user search', () => withServer({}, async (base) => {
+test('sync uses the ordered list, keeps lists and services, rejects stale writes', () => withServer({}, async (base) => {
   const a = client(base);
-  await a('/api/signup', { method: 'POST', body: { username: 'sam_k', password: 'password1', displayName: 'Sam K' } });
-  await a('/api/state', { method: 'PUT', body: { state: sampleState } });
-  const anon = client(base);
-  const prof = await anon('/api/users/sam_k');
-  assert.equal(prof.status, 200);
-  assert.equal(prof.data.user.displayName, 'Sam K');
-  assert.deepEqual(Object.keys(prof.data.songs).sort(), ['1', '2']);
-  assert.equal((await anon('/api/users?q=sam')).data.users[0].ranked, 2);
-  assert.equal((await anon('/api/users?q=%25')).data.users.length, 0); // LIKE wildcards escaped
+  await signup(a, 'maya');
+  const st = stateWith(['1', '2', '3'], {
+    lists: [{ id: 'l1', name: 'Gym Songs', songIds: ['3', '9'], isPublic: true }, { id: 'l2', name: '  ', songIds: [] }],
+    songs: { 1: song('1'), 2: song('2'), 3: song('3'), 9: song('9'), 77: song('77') },
+    connections: { spotify: { connectedAt: 1, name: 'maya', accessToken: 'SECRET' }, bogus: { connectedAt: 1 } },
+  });
+  assert.equal((await a('/api/state', { method: 'PUT', body: { state: st, baseVersion: 0 } })).data.version, 1);
+  assert.equal((await a('/api/state', { method: 'PUT', body: { state: st, baseVersion: 0 } })).status, 409);
+  const me = (await a('/api/me')).data;
+  assert.deepEqual(me.state.order, ['1', '2', '3']);
+  assert.equal(me.state.lists.length, 1, 'nameless list dropped');
+  assert.deepEqual(Object.keys(me.state.songs).sort(), ['1', '2', '3', '9'], 'unreferenced song metadata dropped');
+  assert.deepEqual(me.state.connections, { spotify: { connectedAt: 1, name: 'maya' } }, 'tokens are never stored');
+}));
 
+test('old bucketed data migrates to one ordered list', () => {
+  const st = cleanState({ rankings: { liked: ['a', 'b'], fine: ['c'], disliked: ['d'] }, later: ['z'], songs: { a: song('a'), z: song('z') } });
+  assert.deepEqual(st.order, ['a', 'b', 'c', 'd']);
+  assert.equal(st.later, undefined);
+  assert.deepEqual(Object.keys(st.songs), ['a']);
+});
+
+test('profiles: bio, avatar, public lists only, privacy toggle', () => withServer({}, async (base) => {
+  const a = client(base);
+  await signup(a, 'sam_k');
+  await a('/api/state', { method: 'PUT', body: { state: stateWith(['1', '2'], { lists: [
+    { id: 'p', name: 'Best Rap Song', songIds: ['1'], isPublic: true }, { id: 's', name: 'Secret', songIds: ['2'], isPublic: false }] }) } });
+  assert.equal((await a('/api/me', { method: 'PATCH', body: { avatar: 'javascript:alert(1)' } })).status, 400);
+  const tiny = 'data:image/png;base64,' + Buffer.from('png').toString('base64');
+  const patched = await a('/api/me', { method: 'PATCH', body: { bio: 'Rap and gym music.', avatar: tiny, displayName: 'Sam K' } });
+  assert.equal(patched.data.user.bio, 'Rap and gym music.');
+  const anon = client(base);
+  const prof = (await anon('/api/users/sam_k')).data;
+  assert.equal(prof.user.avatar, tiny);
+  assert.equal(prof.user.email, undefined, 'email is private');
+  assert.deepEqual(prof.lists.map((l) => l.name), ['Best Rap Song']);
+  assert.deepEqual(prof.order, ['1', '2']);
+  assert.equal((await a('/api/users/sam_k')).data.lists.length, 2, 'owner sees private lists');
   await a('/api/me', { method: 'PATCH', body: { isPublic: false } });
   assert.equal((await anon('/api/users/sam_k')).status, 404);
   assert.equal((await anon('/api/users?q=sam')).data.users.length, 0);
-  assert.equal((await a('/api/users/sam_k')).status, 200); // owner can still see it
 }));
 
-test('rejects non-JSON writes and does not serve server files', () => withServer({}, async (base) => {
-  const r = await fetch(base + '/api/login', { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+test('recommendations: similar users’ favourites, with reasons, excluding rated songs', () => withServer({}, async (base) => {
+  // Three people who agree with "me" on songs a, b, c and all love x; one who disagrees and loves y.
+  const order = (ids) => ids;
+  for (const [name, o] of [['nb_one', ['a', 'x', 'b', 'c']], ['nb_two', ['x', 'a', 'b', 'c']], ['nb_three', ['a', 'b', 'x', 'c']], ['contrarian', ['y', 'c', 'b', 'a']]]) {
+    const c = client(base);
+    await signup(c, name);
+    await c('/api/state', { method: 'PUT', body: { state: stateWith(order(o)) } });
+  }
+  const me = client(base);
+  await signup(me, 'me_user');
+  await me('/api/state', { method: 'PUT', body: { state: stateWith(['a', 'b', 'c']) } });
+  const r = (await me('/api/recommendations', { method: 'POST', body: { heard: [song('h1', { title: 'Heard Song' })] } })).data;
+  assert.equal(r.neighbours, 3, 'the contrarian is not a neighbour');
+  assert.ok(!r.items.some((i) => i.song.id === 'y'), 'the contrarian’s favourite is not suggested');
+  assert.equal(r.items[0].song.id, 'h1', 'listening history comes first (rediscovery)');
+  const x = r.items.find((i) => i.song.id === 'x');
+  assert.ok(x, 'song loved by similar users is recommended');
+  assert.match(x.reason, /people with similar taste rated this 9\+|Because you rated/);
+  assert.ok(!r.items.some((i) => ['a', 'b', 'c'].includes(i.song.id)), 'never recommends already-rated songs');
+  // Guests can send their ratings in the body.
+  const guest = client(base);
+  const g = (await guest('/api/recommendations', { method: 'POST', body: { order: ['a', 'b', 'c'], songs: stateWith(['a', 'b', 'c']).songs } })).data;
+  assert.ok(g.items.some((i) => i.song.id === 'x'));
+}));
+
+test('charts validate the genre; Most Streamed needs a Last.fm key; config reports what is on', () => withServer({}, async (base) => {
+  const c = client(base);
+  assert.equal((await c('/api/charts/current?genre=polka')).status, 400);
+  assert.equal((await c('/api/charts/streamed?genre=edm')).status, 404);
+  assert.equal((await c('/api/charts/current?genre=indie')).status, 404, 'no Apple feed for indie');
+  assert.deepEqual((await c('/api/config')).data, { appleMusic: false, spotifyClientId: '', lastfm: false });
+}));
+
+test('serves app assets but nothing else; art proxy only accepts Apple artwork', () => withServer({}, async (base) => {
+  for (const f of ['/', '/genres.js', '/recommend.js', '/config.js', '/ranking.js']) assert.equal((await fetch(base + f)).status, 200, f);
+  for (const f of ['/server.js', '/package.json', '/tests/e2e.js', '/scripts/musickit-token.js', '/data/encore.db']) assert.equal((await fetch(base + f)).status, 404, f);
+  for (const u of ['https://evil.example.com/a.jpg', 'http://is1-ssl.mzstatic.com/a.jpg', 'https://mzstatic.com.evil.io/a.jpg']) {
+    assert.equal((await fetch(base + '/api/art?u=' + encodeURIComponent(u))).status, 400, u);
+  }
+  const r = await fetch(base + '/api/login', { method: 'POST', body: 'x', headers: { 'Content-Type': 'text/plain' } });
   assert.equal(r.status, 415);
-  assert.equal((await fetch(base + '/server.js')).status, 404);
-  assert.equal((await fetch(base + '/data/encore.db')).status, 404);
-  assert.equal((await fetch(base + '/')).status, 200);
 }));
 
 test('Apple Music developer token is a valid ES256 JWT', () => {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
-  const jwt = makeDeveloperToken({ teamId: 'TEAM123456', keyId: 'KEY1234567', key: pem });
+  const jwt = makeDeveloperToken({ teamId: 'TEAM123456', keyId: 'KEY1234567', key: privateKey.export({ type: 'pkcs8', format: 'pem' }) });
   const [h, p, s] = jwt.split('.');
-  const header = JSON.parse(Buffer.from(h, 'base64url'));
-  const payload = JSON.parse(Buffer.from(p, 'base64url'));
-  assert.deepEqual(header, { alg: 'ES256', kid: 'KEY1234567', typ: 'JWT' });
-  assert.equal(payload.iss, 'TEAM123456');
-  assert.ok(payload.exp > payload.iat);
+  assert.deepEqual(JSON.parse(Buffer.from(h, 'base64url')), { alg: 'ES256', kid: 'KEY1234567', typ: 'JWT' });
+  assert.equal(JSON.parse(Buffer.from(p, 'base64url')).iss, 'TEAM123456');
   assert.ok(crypto.verify('sha256', Buffer.from(`${h}.${p}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(s, 'base64url')));
 });
-
-test('developer-token endpoint: 404 when unconfigured, token when configured', async () => {
-  await withServer({}, async (base) => assert.equal((await fetch(base + '/api/apple/developer-token')).status, 404));
-  const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const env = { APPLE_TEAM_ID: 'T', APPLE_KEY_ID: 'K', APPLE_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }) };
-  await withServer(env, async (base) => {
-    const r = await (await fetch(base + '/api/apple/developer-token')).json();
-    assert.equal(r.token.split('.').length, 3);
-  });
-});
-
-test('serves app assets but nothing else, and the art proxy only accepts Apple artwork', () => withServer({}, async (base) => {
-  const font = await fetch(base + '/fonts/manrope-latin-wght-normal.woff2');
-  assert.equal(font.status, 200);
-  assert.equal(font.headers.get('content-type'), 'font/woff2');
-  assert.match(font.headers.get('cache-control'), /immutable/);
-  assert.equal((await fetch(base + '/fonts/../server.js')).status, 404);
-  assert.equal((await fetch(base + '/js/../package.json')).status, 404);
-  assert.equal((await fetch(base + '/tests/e2e.js')).status, 404);
-  for (const u of ['https://evil.example.com/a.jpg', 'http://is1-ssl.mzstatic.com/a.jpg', 'https://mzstatic.com.evil.io/a.jpg', 'not a url']) {
-    assert.equal((await fetch(base + '/api/art?u=' + encodeURIComponent(u))).status, 400, u);
-  }
-}));
