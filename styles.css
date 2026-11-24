@@ -606,9 +606,10 @@ main { position: relative; max-width: 760px; margin: 0 auto; padding-left: var(-
   width: min(440px, calc(100% - 24px)); display: flex; gap: var(--s-3); align-items: center;
   padding: var(--s-3) var(--s-4); border-radius: var(--r-lg); animation: mini-in var(--dur-3) var(--ease-spring) both;
 }
-.wake .eq { height: 22px; } .wake .eq i { width: 4px; background: rgb(var(--c)); }
+.wake.glass { background: var(--glass-strong); }
+.wake .eq { display: flex; flex-shrink: 0; height: 22px; } .wake .eq i { width: 4px; background: rgb(var(--c)); }
 .wake b { display: block; font-size: var(--fs-sm); }
-.wake span { display: block; font-size: var(--fs-xs); color: var(--text-2); font-weight: 600; }
+.wake div > span { display: block; font-size: var(--fs-xs); color: var(--text-2); font-weight: 600; }
 .wake.error .eq { display: none; }
 .wake .btn { min-height: 36px; padding: 0 14px; margin-left: auto; flex-shrink: 0; }
 
