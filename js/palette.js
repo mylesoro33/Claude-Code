@@ -122,8 +122,9 @@
     root.hidden = false;
     document.body.classList.add('palette-open');
     input.value = '';
+    input.focus(); // synchronously, so keys typed right after ⌘K land here
     refresh();
-    requestAnimationFrame(() => { root.classList.add('in'); input.focus(); });
+    requestAnimationFrame(() => root.classList.add('in'));
   }
   function close() {
     if (!open) return;

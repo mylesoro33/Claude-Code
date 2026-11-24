@@ -75,14 +75,17 @@
     ctx.strokeStyle = rgba(c0, 1); ctx.beginPath(); ctx.arc(M + 14, 84, 14, -Math.PI / 2, Math.PI * 1.1); ctx.stroke();
 
     ctx.fillStyle = '#f6f3ff';
-    ctx.font = `700 84px ${DISPLAY}`;
+    let hs = 96; // shrink the headline until it fits on one line
+    do { ctx.font = `700 ${hs}px ${DISPLAY}`; hs -= 4; } while (hs > 44 && ctx.measureText(heading).width > W - M * 2);
     ctx.fillText(fit(ctx, heading, W - M * 2), M, 206);
     ctx.fillStyle = 'rgba(255,255,255,.6)';
     ctx.font = `500 30px ${BODY}`;
     ctx.fillText(fit(ctx, sub, W - M * 2), M, 258);
 
     // Rows.
-    const top = 312, rowH = 94;
+    const rowH = 94;
+    // Centre short lists in the space under the header.
+    const top = 312 + Math.max(0, (10 - Math.min(10, items.length)) * rowH) / 2;
     items.slice(0, 10).forEach((it, i) => {
       const y = top + i * rowH;
       const rgb = it.rgb || c0;
@@ -121,7 +124,7 @@
       ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.beginPath(); ctx.arc(rx, ry, r, 0, Math.PI * 2); ctx.stroke();
       ctx.strokeStyle = rgba(rgb, 1); ctx.beginPath(); ctx.arc(rx, ry, r, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * it.score) / 10); ctx.stroke();
       ctx.fillStyle = '#fff'; ctx.font = `700 21px ${DISPLAY}`; ctx.textAlign = 'center';
-      ctx.fillText(it.score.toFixed(1), rx, ry + 8);
+      ctx.fillText(it.score >= 9.995 ? '10' : it.score.toFixed(1), rx, ry + 8);
       ctx.textAlign = 'left';
     });
 

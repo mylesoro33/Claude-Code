@@ -27,14 +27,16 @@
   }
 
   /** Count a number up from 0 (or `from`) with easing; writes textContent. */
-  function countUp(el, to, { from = 0, duration = 1100, decimals = 1 } = {}) {
+  /** Score label: one decimal, except a perfect 10 (keeps the ring's label narrow). */
+  const fmt = (v) => (v >= 9.995 ? '10' : v.toFixed(1));
+  function countUp(el, to, { from = 0, duration = 1100, format = fmt } = {}) {
     if (!el) return;
-    if (reduced()) { el.textContent = to.toFixed(decimals); return; }
+    if (reduced()) { el.textContent = format(to); return; }
     const t0 = performance.now();
     const ease = (t) => 1 - Math.pow(1 - t, 4);
     function frame(now) {
       const t = Math.min(1, (now - t0) / duration);
-      el.textContent = (from + (to - from) * ease(t)).toFixed(decimals);
+      el.textContent = format(t < 1 ? from + (to - from) * ease(t) : to);
       if (t < 1) requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
@@ -53,7 +55,7 @@
         <circle class="ring-fill" cx="50" cy="50" r="${r}" stroke-width="${stroke * 2.4}" pathLength="100"
           style="stroke-dashoffset:${animate ? 100 : 100 - pct}"/>
       </svg>
-      ${label ? `<b class="ring-num" ${animate ? 'data-count' : ''}>${animate ? '0.0' : value.toFixed(1)}</b>` : ''}
+      ${label ? `<b class="ring-num" ${animate ? 'data-count' : ''}>${animate ? '0.0' : fmt(value)}</b>` : ''}
     </span>`;
   }
   /** Fill any rings inside `root` that were rendered with animate:true. */
@@ -64,7 +66,7 @@
       const num = r.querySelector('[data-count]');
       const go = () => {
         if (fill) fill.style.strokeDashoffset = String(100 - v * 10);
-        if (num) countUp(num, v, { duration: r.classList.contains('hero') ? 1300 : 800 });
+        if (num) countUp(num, v, { duration: r.classList.contains('ring-hero') ? 1300 : 800 });
       };
       if (reduced()) go(); else setTimeout(() => requestAnimationFrame(go), delay + i * 60);
     });
@@ -133,5 +135,5 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
 
-  window.Motion = { reduced, haptic, animate, countUp, ring, fillRings, flip, shared, initImageFade, spring, bounce };
+  window.Motion = { reduced, haptic, animate, countUp, fmt, ring, fillRings, flip, shared, initImageFade, spring, bounce };
 })();
