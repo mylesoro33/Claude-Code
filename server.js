@@ -8,10 +8,7 @@
  *   PORT                      default 3000
  *   DATABASE_PATH             default ./data/encore.db
  *   COOKIE_SECURE=1           set when served over HTTPS
- *   APPLE_TEAM_ID, APPLE_KEY_ID, and APPLE_PRIVATE_KEY (PEM text) or
- *   APPLE_PRIVATE_KEY_PATH    → "Connect Apple Music" (MusicKit)
- *   SPOTIFY_CLIENT_ID         → "Connect Spotify" (OAuth with PKCE; no secret needed)
- *   LASTFM_API_KEY            → live "Most Streamed" charts (Last.fm tag charts)
+ *   Chart sources (all optional): see .env.example and SETUP.md
  */
 'use strict';
 const http = require('node:http');
@@ -23,9 +20,6 @@ const Ranking = require('./ranking.js');
 const { recommend } = require('./recommend.js');
 const Genres = require('./genres.js');
 const { createCharts } = require('./charts');
-const { createBroker, PROVIDERS } = require('./lib/oauth');
-const { createBox } = require('./lib/crypto-box');
-const LOOKUPS = { lastfm: require('./lib/services/lastfm'), spotify: require('./lib/services/spotify'), youtube: require('./lib/services/youtube'), soundcloud: require('./lib/services/soundcloud') };
 
 const ROOT = __dirname;
 const SESSION_DAYS = 60;
@@ -47,7 +41,6 @@ const USERNAME_RE = /^[a-z0-9_.]{3,24}$/i;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
 const AVATAR_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
 const MAX_AVATAR = 200 * 1024;
-const SERVICES = ['apple', 'spotify', 'soundcloud', 'youtube', 'amazon'];
 
 // ---------------- Database ----------------
 function openDb(file) {
@@ -83,12 +76,13 @@ function openDb(file) {
   if (!cols.has('bio')) db.exec("ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT ''");
   if (!cols.has('avatar')) db.exec("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''");
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email) WHERE email IS NOT NULL');
+  // Music-service connections were removed: drop any stored (encrypted) service tokens.
+  db.exec('DROP TABLE IF EXISTS service_tokens');
   return db;
 }
 
 // ---------------- Helpers ----------------
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
-const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
@@ -161,7 +155,7 @@ function cleanSong(id, x) {
 
 /**
  * Validate a client state blob. Accepts the current shape
- * ({ order, lists, connections, ... }) and migrates the old bucketed
+ * ({ order, lists, songs, ratedAt, country }) and migrates the old bucketed
  * { rankings: { liked, fine, disliked }, later } shape.
  */
 function cleanState(s) {
@@ -173,45 +167,18 @@ function cleanState(s) {
     if (!name) return [];
     return [{ id: str(l.id, 40), name, songIds: ids(l.songIds, 500), isPublic: l.isPublic !== false, createdAt: Number(l.createdAt) || Date.now(), updatedAt: Number(l.updatedAt) || Date.now() }];
   });
-  const connections = {};
-  for (const k of SERVICES) {
-    const c = s.connections && s.connections[k];
-    if (c && typeof c === 'object' && c.connectedAt) connections[k] = { connectedAt: Number(c.connectedAt) || Date.now(), name: str(c.name, 80) };
-  }
   // Keep metadata only for songs that are rated or on a list.
-  const favorites = ids(s.favorites, 2000);
-  const keep = new Set([...order, ...lists.flatMap((l) => l.songIds), ...favorites]);
+  const keep = new Set([...order, ...lists.flatMap((l) => l.songIds)]);
   const songs = {};
   for (const [id, x] of Object.entries(s.songs || {})) {
     if (keep.has(id) && x && typeof x === 'object' && id.length < 40) songs[id] = cleanSong(id, x);
   }
   const ratedAt = {};
   for (const [id, t] of Object.entries(s.ratedAt || s.rankedAt || {})) if (keep.has(id) && typeof t === 'number') ratedAt[id] = t;
-  const lookup = s.lookup && typeof s.lookup === 'object' ? { service: str(s.lookup.service, 20), input: str(s.lookup.input, 300), account: str(s.lookup.account, 120), at: Number(s.lookup.at) || 0 } : null;
-  return { songs, order, lists, favorites, connections, lookup, ratedAt, country: str(s.country, 2) || 'us' };
+  return { songs, order, lists, ratedAt, country: str(s.country, 2) || 'us' };
 }
 
-// ---------------- Apple Music developer token (MusicKit) ----------------
-function appleConfig(env = process.env) {
-  let key = env.APPLE_PRIVATE_KEY;
-  if (!key && env.APPLE_PRIVATE_KEY_PATH) {
-    try { key = fs.readFileSync(env.APPLE_PRIVATE_KEY_PATH, 'utf8'); } catch { key = null; }
-  }
-  if (!env.APPLE_TEAM_ID || !env.APPLE_KEY_ID || !key) return null;
-  return { teamId: env.APPLE_TEAM_ID, keyId: env.APPLE_KEY_ID, key: key.replace(/\\n/g, '\n') };
-}
-
-/** ES256 JWT that MusicKit needs. Apple allows up to 180 days; the server mints 12h tokens. */
-function makeDeveloperToken(cfg, ttlSec = 12 * 3600) {
-  const now = Math.floor(Date.now() / 1000);
-  const header = b64url(JSON.stringify({ alg: 'ES256', kid: cfg.keyId, typ: 'JWT' }));
-  const payload = b64url(JSON.stringify({ iss: cfg.teamId, iat: now, exp: now + ttlSec }));
-  const data = `${header}.${payload}`;
-  const sig = crypto.sign('sha256', Buffer.from(data), { key: cfg.key, dsaEncoding: 'ieee-p1363' });
-  return `${data}.${b64url(sig)}`;
-}
-
-// ---------------- Upstream fetches (Apple catalog, charts, Last.fm) ----------------
+// ---------------- Upstream fetches (iTunes Search API: search, lookup, top songs) ----------------
 const proxyCache = new Map();
 async function cachedFetchJson(url, ttlMs = 10 * 60 * 1000) {
   const hit = proxyCache.get(url);
@@ -228,14 +195,11 @@ async function cachedFetchJson(url, ttlMs = 10 * 60 * 1000) {
 // ---------------- App ----------------
 function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data', 'encore.db'), env = process.env, fetch: fetchImpl = globalThis.fetch, log = console.warn, scheduleCharts = false, chartOptions = {} } = {}) {
   const db = openDb(dbPath);
-  const broker = createBroker({ db, env, fetch: fetchImpl, box: createBox(env.TOKEN_ENCRYPTION_KEY, log), log });
   const charts = createCharts({ db, env, fetch: fetchImpl, log, ...chartOptions });
   if (scheduleCharts) charts.schedule();
-  const svcLimit = limiter(240, 60 * 1000);
   const secure = env.COOKIE_SECURE === '1';
   const authLimit = limiter(20, 15 * 60 * 1000);
   const recLimit = limiter(120, 60 * 1000);
-  let devToken = null;
   let communityCache = null; // public users' ratings; rebuilt after any write
 
   const q = {
@@ -265,30 +229,12 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
     if (!tok) return null;
     return q.session.get(sha256(tok), Date.now()) || null;
   }
-  function addCookie(res, c) {
-    const cur = res.getHeader('Set-Cookie');
-    res.setHeader('Set-Cookie', [...(Array.isArray(cur) ? cur : cur ? [cur] : []), c]);
-  }
-  function startSession(res, userId, req) {
+  function startSession(res, userId) {
     const tok = crypto.randomBytes(32).toString('base64url');
     const expires = Date.now() + SESSION_DAYS * 864e5;
     q.insertSession.run(sha256(tok), userId, expires);
     q.purgeSessions.run(Date.now());
-    addCookie(res, `encore_session=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure ? '; Secure' : ''}`);
-    // Services connected as a guest on this device move to the account.
-    const dev = req && parseCookies(req).encore_device;
-    if (dev) broker.adopt('d:' + dev, 'u:' + userId);
-  }
-  /** Who owns service connections: the signed-in user, else this device (a random cookie). */
-  function owner(req, res) {
-    const u = currentUser(req);
-    if (u) return 'u:' + u.id;
-    let dev = parseCookies(req).encore_device;
-    if (!dev || !/^[\w-]{16,64}$/.test(dev)) {
-      dev = crypto.randomBytes(18).toString('base64url');
-      addCookie(res, `encore_device=${dev}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${365 * 86400}${secure ? '; Secure' : ''}`);
-    }
-    return 'd:' + dev;
+    res.setHeader('Set-Cookie', `encore_session=${tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure ? '; Secure' : ''}`);
   }
   function stateFor(userId) {
     const row = q.getState.get(userId);
@@ -315,55 +261,6 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
     // Only accept JSON writes from our own pages (basic CSRF protection on top of SameSite).
     if (m !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) return send(res, 415, { error: 'JSON required' });
 
-    if (p === '/api/config' && m === 'GET') {
-      return send(res, 200, {
-        appleMusic: !!appleConfig(env), spotifyClientId: env.SPOTIFY_CLIENT_ID || '', lastfm: !!env.LASTFM_API_KEY,
-        services: Object.fromEntries(Object.keys(PROVIDERS).map((k) => [k, broker.configured(k)])),
-        lookups: { lastfm: !!env.LASTFM_API_KEY, spotify: !!(env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET), youtube: !!env.YOUTUBE_API_KEY, soundcloud: !!(env.SOUNDCLOUD_CLIENT_ID && env.SOUNDCLOUD_CLIENT_SECRET) },
-      });
-    }
-
-    // ----- Connected services -----
-    if (p === '/api/connections' && m === 'GET') {
-      return send(res, 200, { connections: broker.list(owner(req, res)), apple: { configured: !!appleConfig(env) } });
-    }
-    const disc = p.match(/^\/api\/connections\/([a-z]+)\/disconnect$/);
-    if (disc && m === 'POST' && PROVIDERS[disc[1]]) { broker.disconnect(owner(req, res), disc[1]); return send(res, 200, { ok: true }); }
-    const sv = p.match(/^\/api\/svc\/([a-z]+)\/(recent|favorite|playlists)(?:\/([^/]+)\/tracks)?$/);
-    if (sv && PROVIDERS[sv[1]]) {
-      if (!svcLimit('svc:' + req.socket.remoteAddress)) return send(res, 429, { error: 'Slow down a little.' });
-      const [, svc, action, playlistId] = sv;
-      const who = owner(req, res);
-      const a = broker.adapter(who, svc);
-      const name = PROVIDERS[svc].name;
-      const songOf = (b) => ({ title: str(b.title, 300), artist: str(b.artist, 300), album: str(b.album, 300) });
-      if (action === 'recent' && m === 'GET') return send(res, 200, { tracks: await a.recent() });
-      if (action === 'favorite' && m === 'POST') {
-        const hit = await a.favorite(songOf(await readJson(req)));
-        return hit ? send(res, 200, { ok: true, matched: hit }) : send(res, 404, { error: `Couldn’t find this song on ${name}.` });
-      }
-      if (action === 'playlists' && !playlistId && m === 'GET') return send(res, 200, { playlists: await a.playlists() });
-      if (action === 'playlists' && !playlistId && m === 'POST') {
-        const nm = str((await readJson(req)).name, 100).trim();
-        if (!nm) return send(res, 400, { error: 'Give the playlist a name.' });
-        return send(res, 201, { playlist: await a.createPlaylist(nm) });
-      }
-      if (action === 'playlists' && playlistId && m === 'POST') {
-        const hit = await a.addToPlaylist(decodeURIComponent(playlistId), songOf(await readJson(req)));
-        return hit ? send(res, 200, { ok: true, matched: hit }) : send(res, 404, { error: `Couldn’t find this song on ${name}.` });
-      }
-    }
-
-    // ----- Find my account (public profiles) -----
-    if (p === '/api/lookup' && m === 'POST') {
-      if (!svcLimit('lookup:' + req.socket.remoteAddress)) return send(res, 429, { error: 'Slow down a little.' });
-      const b = await readJson(req);
-      const mod = LOOKUPS[b.service];
-      const input = str(b.input, 300).trim();
-      if (!mod || !input) return send(res, 400, { error: 'Pick a service and enter a username or profile link.' });
-      return send(res, 200, await mod.lookup(input, { env, fetch: fetchImpl }));
-    }
-
     // ----- Accounts -----
     if (p === '/api/signup' && m === 'POST') {
       if (!authLimit('auth:' + req.socket.remoteAddress)) return send(res, 429, { error: 'Too many attempts. Try again later.' });
@@ -378,7 +275,7 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       if (q.userByName.get(username)) return send(res, 409, { error: 'That username is taken. Try another.', field: 'username' });
       const { hash, salt } = hashPassword(password);
       const r = q.insertUser.run(username, email, str(b.displayName, 40).trim() || username, hash, salt, Date.now());
-      startSession(res, Number(r.lastInsertRowid), req);
+      startSession(res, Number(r.lastInsertRowid));
       return send(res, 201, { user: selfUser(q.userByName.get(username)), ...stateFor(Number(r.lastInsertRowid)) });
     }
 
@@ -393,7 +290,7 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       const login = str(b.login || b.email || b.username, 254).trim();
       const u = login.includes('@') ? q.userByEmail.get(login.toLowerCase()) : q.userByName.get(login);
       if (!u || typeof b.password !== 'string' || !verifyPassword(b.password, u.salt, u.pass_hash)) return send(res, 401, { error: 'That email or password isn’t right.' });
-      startSession(res, u.id, req);
+      startSession(res, u.id);
       return send(res, 200, { user: selfUser(u), ...stateFor(u.id) });
     }
 
@@ -469,12 +366,12 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       const me = currentUser(req);
       const own = me && u && me.id === u.id;
       if (!u || (!u.is_public && !own)) return send(res, 404, { error: 'No such user' });
-      const st = stateFor(u.id).state || { order: [], lists: [], songs: {}, connections: {} };
+      const st = stateFor(u.id).state || { order: [], lists: [], songs: {} };
       const lists = (st.lists || []).filter((l) => own || l.isPublic);
       const want = new Set([...st.order, ...lists.flatMap((l) => l.songIds)]);
       const songs = {};
       for (const id of want) if (st.songs[id]) songs[id] = st.songs[id];
-      return send(res, 200, { user: publicUser(u), order: st.order, lists, songs, connections: Object.keys(st.connections || {}) });
+      return send(res, 200, { user: publicUser(u), order: st.order, lists, songs });
     }
 
     // ----- Recommendations (collaborative filtering across public profiles) -----
@@ -492,18 +389,10 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       }
       // A device can be ahead of the last sync; prefer what it sends.
       if (u && Array.isArray(b.order)) { const st = cleanState({ order: b.order, songs: { ...me.songs, ...(b.songs || {}) } }); me = { order: st.order, songs: st.songs }; }
-      me.heard = (Array.isArray(b.heard) ? b.heard : []).slice(0, 60).filter((x) => x && typeof x.id === 'string').map((x) => cleanSong(x.id, x));
       const others = community().filter((o) => !u || o.userId !== u.id);
-      const out = recommend({ me, others, limit: Math.min(50, Number(b.limit) || 30) });
+      // "Refresh" asks for a new batch: skip songs it has already shown.
+      const out = recommend({ me, others, limit: Math.min(50, Number(b.limit) || 30), exclude: ids(b.exclude, 500) });
       return send(res, 200, { ...out, community: others.length });
-    }
-
-    // ----- Apple Music -----
-    if (p === '/api/apple/developer-token' && m === 'GET') {
-      const cfg = appleConfig(env);
-      if (!cfg) return send(res, 404, { error: 'Apple Music isn’t set up on this server yet.' });
-      if (!devToken || devToken.exp < Date.now() + 3600e3) devToken = { token: makeDeveloperToken(cfg), exp: Date.now() + 12 * 3600e3 };
-      return send(res, 200, { token: devToken.token });
     }
 
     // Album-art proxy: same-origin copies of Apple artwork, so the app can read
@@ -522,14 +411,14 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       return res.end(buf);
     }
 
-    // ----- Genre charts: /api/charts?genre=pop (current + most streamed, cached server-side) -----
+    // ----- Genre charts: /api/charts?genre=pop (Charts + Most Streamed tabs, cached server-side) -----
     if (p === '/api/charts' && m === 'GET') {
       const key = url.searchParams.get('genre') || '';
       if (!Genres.byKey[key]) return send(res, 400, { error: 'Unknown genre' });
       return send(res, 200, await charts.forGenre(key));
     }
 
-    // ----- Apple public catalog proxy (search / lookup / overall chart) -----
+    // ----- Song catalog proxy: iTunes Search API, no login (search / lookup / top songs) -----
     if (p.startsWith('/api/catalog/') && m === 'GET') {
       const cc = country(url);
       const kind = p.slice('/api/catalog/'.length);
@@ -552,19 +441,6 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
     return send(res, 404, { error: 'Not found' });
   }
 
-  /** OAuth: start → provider consent screen; callback → back into the app (Profile). */
-  async function oauthRoute(req, res, url, svc, step) {
-    const back = (qs) => { res.writeHead(302, { Location: `/?${qs}#profile`, 'Cache-Control': 'no-store' }); res.end(); };
-    try {
-      if (step === 'start') { const loc = broker.start(svc, owner(req, res)); res.writeHead(302, { Location: loc, 'Cache-Control': 'no-store' }); return res.end(); }
-      await broker.callback(svc, Object.fromEntries(url.searchParams));
-      return back(`connected=${svc}`);
-    } catch (e) {
-      if (!e.status) log(e);
-      return back(`svc=${svc}&svc_error=${encodeURIComponent(e.message || 'Connection failed')}`);
-    }
-  }
-
   function serveStatic(req, res, url) {
     const asset = url.pathname.match(ASSET_RE);
     const file = STATIC[url.pathname] || (asset && asset[1]);
@@ -581,13 +457,11 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
-      const au = url.pathname.match(/^\/auth\/([a-z]+)\/(start|callback)$/);
-      if (au && PROVIDERS[au[1]] && req.method === 'GET') return await oauthRoute(req, res, url, au[1], au[2]);
       if (url.pathname.startsWith('/api/')) await api(req, res, url);
       else if (req.method === 'GET' || req.method === 'HEAD') serveStatic(req, res, url);
       else send(res, 405, 'Method not allowed');
     } catch (err) {
-      if (!res.headersSent) send(res, err.status || 500, { error: err.status ? err.message : 'Server error', ...(err.reauth ? { reauth: true } : {}), ...(err.missing ? { missing: err.missing } : {}) });
+      if (!res.headersSent) send(res, err.status || 500, { error: err.status ? err.message : 'Server error' });
       if (!err.status) console.error(err);
     }
   });
@@ -595,15 +469,13 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
   return server;
 }
 
-module.exports = { createApp, makeDeveloperToken, appleConfig, cleanState };
+module.exports = { createApp, cleanState };
 
 if (require.main === module) {
   require('./lib/env').load(__dirname);
   const port = Number(process.env.PORT) || 3000;
   createApp({ scheduleCharts: true }).listen(port, () => {
     console.log(`Encore running at http://localhost:${port}`);
-    console.log(appleConfig() ? 'Apple Music: enabled' : 'Apple Music: off (set APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY)');
-    console.log(process.env.SPOTIFY_CLIENT_ID ? 'Spotify: enabled' : 'Spotify: off (set SPOTIFY_CLIENT_ID)');
     console.log(`Charts: Apple Music + Deezer${process.env.KWORB_ENABLED !== '0' ? ' + Kworb (Spotify streams)' : ''}${process.env.LASTFM_API_KEY ? ' + Last.fm' : ''}${process.env.BILLBOARD_PROVIDER ? ' + Billboard' : ''}`);
   });
 }

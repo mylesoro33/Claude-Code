@@ -1,11 +1,11 @@
 {
   "name": "encore",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Beli-style song ranking on the Apple Music catalog",
+  "description": "Rate songs head to head, build lists, browse genre charts",
   "scripts": {
     "start": "node --no-warnings=ExperimentalWarning server.js",
-    "test": "node --no-warnings=ExperimentalWarning --test tests/ranking.test.js tests/server.test.js tests/recommend.test.js tests/services.test.js tests/charts.test.js"
+    "test": "node --no-warnings=ExperimentalWarning --test tests/ranking.test.js tests/server.test.js tests/recommend.test.js tests/charts.test.js"
   },
   "engines": { "node": ">=22.13" }
 }

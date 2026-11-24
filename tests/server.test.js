@@ -1,7 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const crypto = require('node:crypto');
-const { createApp, makeDeveloperToken, cleanState } = require('../server.js');
+const { createApp, cleanState } = require('../server.js');
 
 async function withServer(env, fn) {
   const server = createApp({ dbPath: ':memory:', env });
@@ -25,7 +24,7 @@ function client(base) {
   };
 }
 const song = (id, extra = {}) => ({ id, title: 'Song ' + id, artist: 'Artist ' + id, album: 'LP', genre: 'Pop', ...extra });
-const stateWith = (order, extra = {}) => ({ order, songs: Object.fromEntries(order.map((id) => [id, song(id)])), lists: [], connections: {}, ...extra });
+const stateWith = (order, extra = {}) => ({ order, songs: Object.fromEntries(order.map((id) => [id, song(id)])), lists: [], ...extra });
 const signup = (c, username, email = `${username}@example.com`) => c('/api/signup', { method: 'POST', body: { email, username, password: 'correct horse' } });
 
 test('sign up needs a valid email and a unique username; log in with either', () => withServer({}, async (base) => {
@@ -49,13 +48,13 @@ test('sign up needs a valid email and a unique username; log in with either', ()
   assert.equal((await c('/api/login', { method: 'POST', body: { login: 'maya', password: 'correct horse' } })).status, 200);
 }));
 
-test('sync uses the ordered list, keeps lists and services, rejects stale writes', () => withServer({}, async (base) => {
+test('sync uses the ordered list, keeps lists, drops old connection data, rejects stale writes', () => withServer({}, async (base) => {
   const a = client(base);
   await signup(a, 'maya');
   const st = stateWith(['1', '2', '3'], {
     lists: [{ id: 'l1', name: 'Gym Songs', songIds: ['3', '9'], isPublic: true }, { id: 'l2', name: '  ', songIds: [] }],
     songs: { 1: song('1'), 2: song('2'), 3: song('3'), 9: song('9'), 77: song('77') },
-    connections: { spotify: { connectedAt: 1, name: 'maya', accessToken: 'SECRET' }, bogus: { connectedAt: 1 } },
+    connections: { spotify: { connectedAt: 1, name: 'maya', accessToken: 'SECRET' } }, favorites: ['77'], lookup: { service: 'lastfm', account: 'x' },
   });
   assert.equal((await a('/api/state', { method: 'PUT', body: { state: st, baseVersion: 0 } })).data.version, 1);
   assert.equal((await a('/api/state', { method: 'PUT', body: { state: st, baseVersion: 0 } })).status, 409);
@@ -63,7 +62,7 @@ test('sync uses the ordered list, keeps lists and services, rejects stale writes
   assert.deepEqual(me.state.order, ['1', '2', '3']);
   assert.equal(me.state.lists.length, 1, 'nameless list dropped');
   assert.deepEqual(Object.keys(me.state.songs).sort(), ['1', '2', '3', '9'], 'unreferenced song metadata dropped');
-  assert.deepEqual(me.state.connections, { spotify: { connectedAt: 1, name: 'maya' } }, 'tokens are never stored');
+  assert.deepEqual([me.state.connections, me.state.favorites, me.state.lookup], [undefined, undefined, undefined], 'old connection fields are dropped');
 }));
 
 test('old bucketed data migrates to one ordered list', () => {
@@ -105,43 +104,35 @@ test('recommendations: similar users’ favourites, with reasons, excluding rate
   const me = client(base);
   await signup(me, 'me_user');
   await me('/api/state', { method: 'PUT', body: { state: stateWith(['a', 'b', 'c']) } });
-  const r = (await me('/api/recommendations', { method: 'POST', body: { heard: [song('h1', { title: 'Heard Song' })] } })).data;
+  const r = (await me('/api/recommendations', { method: 'POST', body: {} })).data;
   assert.equal(r.neighbours, 3, 'the contrarian is not a neighbour');
   assert.ok(!r.items.some((i) => i.song.id === 'y'), 'the contrarian’s favourite is not suggested');
-  assert.equal(r.items[0].song.id, 'h1', 'listening history comes first (rediscovery)');
   const x = r.items.find((i) => i.song.id === 'x');
   assert.ok(x, 'song loved by similar users is recommended');
   assert.match(x.reason, /people with similar taste rated this 9\+|Because you rated/);
   assert.ok(!r.items.some((i) => ['a', 'b', 'c'].includes(i.song.id)), 'never recommends already-rated songs');
+  // Refresh: songs already shown are skipped.
+  const again = (await me('/api/recommendations', { method: 'POST', body: { exclude: ['x'] } })).data;
+  assert.ok(!again.items.some((i) => i.song.id === 'x'), 'excluded songs are not shown again');
   // Guests can send their ratings in the body.
   const guest = client(base);
   const g = (await guest('/api/recommendations', { method: 'POST', body: { order: ['a', 'b', 'c'], songs: stateWith(['a', 'b', 'c']).songs } })).data;
   assert.ok(g.items.some((i) => i.song.id === 'x'));
 }));
 
-test('charts reject unknown genres; config reports what is on', () => withServer({}, async (base) => {
+test('charts reject unknown genres; no music-service connection routes remain', () => withServer({}, async (base) => {
   const c = client(base);
   assert.equal((await c('/api/charts?genre=polka')).status, 400);
-  const cfg = (await c('/api/config')).data;
-  assert.deepEqual([cfg.appleMusic, cfg.spotifyClientId, cfg.lastfm], [false, '', false]);
-  assert.deepEqual(cfg.services, { spotify: false, youtube: false, soundcloud: false, amazon: false });
+  for (const p of ['/api/config', '/api/connections', '/api/apple/developer-token', '/api/svc/spotify/recent']) assert.equal((await c(p)).status, 404, p);
+  assert.equal((await fetch(base + '/auth/spotify/start', { redirect: 'manual' })).status, 404);
 }));
 
 test('serves app assets but nothing else; art proxy only accepts Apple artwork', () => withServer({}, async (base) => {
   for (const f of ['/', '/genres.js', '/recommend.js', '/config.js', '/ranking.js']) assert.equal((await fetch(base + f)).status, 200, f);
-  for (const f of ['/server.js', '/package.json', '/tests/e2e.js', '/scripts/musickit-token.js', '/data/encore.db']) assert.equal((await fetch(base + f)).status, 404, f);
+  for (const f of ['/server.js', '/package.json', '/tests/e2e.js', '/data/encore.db']) assert.equal((await fetch(base + f)).status, 404, f);
   for (const u of ['https://evil.example.com/a.jpg', 'http://is1-ssl.mzstatic.com/a.jpg', 'https://mzstatic.com.evil.io/a.jpg']) {
     assert.equal((await fetch(base + '/api/art?u=' + encodeURIComponent(u))).status, 400, u);
   }
   const r = await fetch(base + '/api/login', { method: 'POST', body: 'x', headers: { 'Content-Type': 'text/plain' } });
   assert.equal(r.status, 415);
 }));
-
-test('Apple Music developer token is a valid ES256 JWT', () => {
-  const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const jwt = makeDeveloperToken({ teamId: 'TEAM123456', keyId: 'KEY1234567', key: privateKey.export({ type: 'pkcs8', format: 'pem' }) });
-  const [h, p, s] = jwt.split('.');
-  assert.deepEqual(JSON.parse(Buffer.from(h, 'base64url')), { alg: 'ES256', kid: 'KEY1234567', typ: 'JWT' });
-  assert.equal(JSON.parse(Buffer.from(p, 'base64url')).iss, 'TEAM123456');
-  assert.ok(crypto.verify('sha256', Buffer.from(`${h}.${p}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(s, 'base64url')));
-});

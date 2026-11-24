@@ -4,16 +4,17 @@
  *  1. Similar users: anyone who rated at least 2 of the same songs and whose
  *     scores on them are within ~3 points of yours on average. Similarity is
  *     that agreement (1 − mean gap / 10), discounted when the overlap is small.
- *  2. Candidates: songs your neighbours rated that you haven't, plus songs from
- *     your own listening history you haven't rated yet.
- *  3. Ranking favours songs you've probably heard already: your listening
- *     history, songs many similar listeners rated 9+, your favourite artists
- *     and genres. The predicted score (similarity-weighted average of neighbour
- *     scores) breaks ties and filters out songs your neighbours disliked.
+ *  2. Candidates: songs your neighbours rated that you haven't. Songs you've
+ *     rated are never suggested; `exclude` skips songs already shown (Refresh).
+ *  3. Ranking favours songs you've probably heard already: songs many similar
+ *     listeners rated 9+, your favourite artists and genres. The predicted
+ *     score (similarity-weighted average of neighbour scores) breaks ties and
+ *     filters out songs your neighbours disliked.
  *  4. Every pick carries a short human reason.
  *
  * Shared by the server (real collaborative filtering across users) and the
- * browser (history + favourites only, when there's no server).
+ * browser (no other users there, so it returns nothing and the app falls back
+ * to your favourite artists and the charts).
  */
 (function (root) {
   const R = typeof module !== 'undefined' && module.exports ? require('./ranking.js') : root.Ranking;
@@ -27,11 +28,13 @@
   }
 
   /**
-   * me:     { order, songs, heard: [song] }   (heard = recent listening history)
-   * others: [{ order, songs }]                (other users, never including me)
+   * me:      { order, songs }
+   * others:  [{ order, songs }]   (other users, never including me)
+   * exclude: [songId]             (already shown; Refresh asks for a new batch)
    * Returns { items: [{ song, predicted, reason, kind, rank }], neighbours }.
    */
-  function recommend({ me, others = [], limit = 30 }) {
+  function recommend({ me, others = [], limit = 30, exclude = [] }) {
+    const skip = new Set(exclude);
     const mine = scoreMap(me.order);
     const songs = me.songs || {};
     // Favourite artists and genres from my own ratings.
@@ -69,13 +72,13 @@
     const cand = new Map();
     const get = (id, song) => {
       let c = cand.get(id);
-      if (!c) { c = { id, song, sum: 0, w: 0, support: 0, high: 0, heard: false, anchor: null }; cand.set(id, c); }
+      if (!c) { c = { id, song, sum: 0, w: 0, support: 0, high: 0, anchor: null }; cand.set(id, c); }
       if (!c.song && song) c.song = song;
       return c;
     };
     for (const nb of top) {
       for (const [id, sc] of nb.os) {
-        if (mine.has(id)) continue;
+        if (mine.has(id) || skip.has(id)) continue;
         const c = get(id, nb.songs[id]);
         c.sum += sc * nb.sim; c.w += nb.sim; c.support++;
         if (sc >= 9) c.high++;
@@ -90,27 +93,24 @@
         }
       }
     }
-    for (const s of me.heard || []) if (s && s.id && !mine.has(s.id)) get(s.id, s).heard = true;
 
     // 3. Rank, mostly by familiarity.
     const items = [];
     for (const c of cand.values()) {
       if (!c.song || !c.song.title) continue;
       const predicted = c.w ? c.sum / c.w : null;
-      if (predicted !== null && predicted < 5 && !c.heard) continue; // neighbours didn't like it
+      if (predicted !== null && predicted < 5) continue; // neighbours didn't like it
       const fav = favArtist(c.song.artist);
       const inGenre = c.song.genre && topGenres.has(c.song.genre);
       // Trust a prediction more when several similar listeners back it.
       const conf = Math.min(1, c.w / 1.2);
       const rank = 0.65 * (1 - conf) + ((predicted ?? 6.5) / 10) * conf
-        + (c.heard ? 1.2 : 0)
         + 0.7 * Math.min(1, c.high / 3)
         + (fav ? 0.6 : 0)
         + (inGenre ? 0.25 : 0)
         + 0.15 * Math.min(1, c.support / 5);
       let reason, kind;
-      if (c.heard) { reason = 'You played this recently and haven’t rated it'; kind = 'history'; }
-      else if (c.high >= 2) { reason = `${c.high} people with similar taste rated this 9+`; kind = 'neighbours'; }
+      if (c.high >= 2) { reason = `${c.high} people with similar taste rated this 9+`; kind = 'neighbours'; }
       else if (fav) { reason = `Because you rated ${fav.best.title} a ${fmt(fav.best.score)}`; kind = 'artist'; }
       else if (c.anchor) { reason = `Because you rated ${c.anchor.title} a ${fmt(c.anchor.score)}`; kind = 'similar'; }
       else if (inGenre) { reason = `Popular with listeners who share your ${c.song.genre} picks`; kind = 'genre'; }
