@@ -210,7 +210,9 @@ const proxyCache = new Map();
 async function cachedFetchJson(url, ttlMs = 10 * 60 * 1000) {
   const hit = proxyCache.get(url);
   if (hit && Date.now() - hit.t < ttlMs) return hit.data;
-  const res = await fetch(url, { headers: { 'User-Agent': 'Encore/3.0' } });
+  let res;
+  try { res = await fetch(url, { headers: { 'User-Agent': 'Encore/3.0' } }); }
+  catch { throw Object.assign(new Error('Music service unavailable'), { status: 502 }); }
   if (!res.ok) throw Object.assign(new Error('Upstream ' + res.status), { status: 502 });
   const data = await res.json();
   if (proxyCache.size > 800) proxyCache.clear();

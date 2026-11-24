@@ -5,8 +5,9 @@
  */
 (function () {
   const W = 1080, H = 1350;
-  const DISPLAY = '"Unbounded", "Arial Black", system-ui, sans-serif';
-  const BODY = '"Manrope", system-ui, -apple-system, sans-serif';
+  const DISPLAY = '"Fraunces", Georgia, serif';
+  const BODY = '"Archivo", system-ui, -apple-system, sans-serif';
+  const INK = '#16100c', CREAM = '#f2e8d5', CREAM2 = 'rgba(242,232,213,.62)', CREAM3 = 'rgba(242,232,213,.4)', ACCENT = '#d65a24';
 
   function loadImage(src, timeout = 5000) {
     return new Promise((resolve) => {
@@ -30,10 +31,9 @@
     if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
     else { ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); }
   }
-  const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 
   /**
-   * items: [{ title, artist, score, rgb:[r,g,b], art:url }]
+   * items: [{ title, artist, score, art:url }]
    * Returns a PNG Blob.
    */
   async function render({ heading = 'My Top 10', sub = '', items }) {
@@ -44,41 +44,35 @@
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     const ctx = c.getContext('2d');
-    const c0 = items[0]?.rgb || [255, 79, 123];
-    const c1 = items[1]?.rgb || c0;
-
-    // Stage: near-black with two colored glows taken from the top covers.
-    ctx.fillStyle = '#07070b';
+    // Stage: warm black, a record's grooves bleeding off the right edge, paper grain.
+    ctx.fillStyle = INK;
     ctx.fillRect(0, 0, W, H);
-    let g = ctx.createRadialGradient(140, 120, 0, 140, 120, 900);
-    g.addColorStop(0, rgba(c0, 0.55)); g.addColorStop(1, rgba(c0, 0));
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    g = ctx.createRadialGradient(W - 80, H - 60, 0, W - 80, H - 60, 820);
-    g.addColorStop(0, rgba(c1, 0.35)); g.addColorStop(1, rgba(c1, 0));
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    // Film grain.
+    ctx.save();
+    ctx.translate(W + 120, 250);
+    for (let r = 40; r < 560; r += 7) { ctx.strokeStyle = `rgba(242,232,213,${r % 21 === 0 ? 0.07 : 0.035})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.fillStyle = ACCENT; ctx.beginPath(); ctx.arc(0, 0, 150, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
     const n = document.createElement('canvas'); n.width = n.height = 160;
     const nc = n.getContext('2d'); const id = nc.createImageData(160, 160);
-    for (let i = 0; i < id.data.length; i += 4) { const v = Math.random() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 18; }
+    for (let i = 0; i < id.data.length; i += 4) { const v = 180 + Math.random() * 75; id.data[i] = v; id.data[i + 1] = v * 0.95; id.data[i + 2] = v * 0.85; id.data[i + 3] = 14; }
     nc.putImageData(id, 0, 0);
     ctx.fillStyle = ctx.createPattern(n, 'repeat'); ctx.fillRect(0, 0, W, H);
 
     // Header.
     const M = 64;
-    ctx.fillStyle = 'rgba(255,255,255,.62)';
-    ctx.font = `700 22px ${BODY}`;
+    ctx.fillStyle = ACCENT;
+    ctx.font = `800 22px ${BODY}`;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '6px';
     ctx.fillText('ENCORE', M + 44, 92);
     if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-    ctx.lineWidth = 6; ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.beginPath(); ctx.arc(M + 14, 84, 14, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = rgba(c0, 1); ctx.beginPath(); ctx.arc(M + 14, 84, 14, -Math.PI / 2, Math.PI * 1.1); ctx.stroke();
+    ctx.fillStyle = '#0b0908'; ctx.beginPath(); ctx.arc(M + 14, 84, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = ACCENT; ctx.beginPath(); ctx.arc(M + 14, 84, 6, 0, Math.PI * 2); ctx.fill();
 
-    ctx.fillStyle = '#f6f3ff';
+    ctx.fillStyle = CREAM;
     let hs = 96; // shrink the headline until it fits on one line
-    do { ctx.font = `700 ${hs}px ${DISPLAY}`; hs -= 4; } while (hs > 44 && ctx.measureText(heading).width > W - M * 2);
+    do { ctx.font = `900 ${hs}px ${DISPLAY}`; hs -= 4; } while (hs > 44 && ctx.measureText(heading).width > W - M * 2);
     ctx.fillText(fit(ctx, heading, W - M * 2), M, 206);
-    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.fillStyle = CREAM2;
     ctx.font = `500 30px ${BODY}`;
     ctx.fillText(fit(ctx, sub, W - M * 2), M, 258);
 
@@ -88,49 +82,44 @@
     const top = 312 + Math.max(0, (10 - Math.min(10, items.length)) * rowH) / 2;
     items.slice(0, 10).forEach((it, i) => {
       const y = top + i * rowH;
-      const rgb = it.rgb || c0;
-      if (i === 0) {
-        ctx.fillStyle = 'rgba(255,255,255,.07)';
-        rr(ctx, M - 20, y - 8, W - (M - 20) * 2, rowH - 4, 26); ctx.fill();
-        ctx.strokeStyle = rgba(rgb, 0.45); ctx.lineWidth = 2; ctx.stroke();
-      }
-      ctx.fillStyle = i === 0 ? rgba(rgb, 1) : 'rgba(255,255,255,.45)';
-      ctx.font = `700 ${i === 0 ? 36 : 30}px ${DISPLAY}`;
+      if (i > 0) { ctx.fillStyle = 'rgba(242,232,213,.1)'; ctx.fillRect(M, y - 6, W - M * 2, 1); }
+      ctx.fillStyle = i < 3 ? ACCENT : CREAM3;
+      ctx.font = `800 ${i === 0 ? 38 : 32}px ${DISPLAY}`;
       ctx.textAlign = 'center';
       ctx.fillText(String(i + 1), M + 18, y + 52);
       ctx.textAlign = 'left';
       // Cover.
       const cx = M + 58, cs = 74;
       ctx.save();
-      rr(ctx, cx, y + 2, cs, cs, 14); ctx.clip();
+      rr(ctx, cx, y + 2, cs, cs, 3); ctx.clip();
       if (imgs[i]) ctx.drawImage(imgs[i], cx, y + 2, cs, cs);
       else {
-        const gg = ctx.createLinearGradient(cx, y, cx + cs, y + cs);
-        gg.addColorStop(0, rgba(rgb, 1)); gg.addColorStop(1, rgba(rgb.map((v) => v * 0.45), 1));
-        ctx.fillStyle = gg; ctx.fillRect(cx, y + 2, cs, cs);
+        ctx.fillStyle = '#382a20'; ctx.fillRect(cx, y + 2, cs, cs);
       }
       ctx.restore();
       // Text.
       const tx = cx + cs + 26, tmax = W - M - 96 - tx;
-      ctx.fillStyle = '#f6f3ff';
+      ctx.fillStyle = CREAM;
       ctx.font = `700 31px ${BODY}`;
       ctx.fillText(fit(ctx, it.title, tmax), tx, y + 34);
-      ctx.fillStyle = 'rgba(255,255,255,.58)';
+      ctx.fillStyle = CREAM2;
       ctx.font = `500 25px ${BODY}`;
       ctx.fillText(fit(ctx, it.artist, tmax), tx, y + 68);
-      // Score ring.
-      const rx = W - M - 34, ry = y + 39, r = 31;
-      ctx.lineWidth = 7;
-      ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.beginPath(); ctx.arc(rx, ry, r, 0, Math.PI * 2); ctx.stroke();
-      ctx.strokeStyle = rgba(rgb, 1); ctx.beginPath(); ctx.arc(rx, ry, r, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * it.score) / 10); ctx.stroke();
-      ctx.fillStyle = '#fff'; ctx.font = `700 21px ${DISPLAY}`; ctx.textAlign = 'center';
-      ctx.fillText(it.score >= 9.995 ? '10' : it.score.toFixed(1), rx, ry + 8);
+      // Price-sticker score.
+      const rx = W - M - 34, ry = y + 39;
+      ctx.save(); ctx.translate(rx, ry); ctx.rotate(-0.14);
+      ctx.fillStyle = it.score >= 9 ? ACCENT : CREAM; ctx.beginPath(); ctx.arc(0, 0, 32, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = INK; ctx.font = `850 24px ${DISPLAY}`; ctx.textAlign = 'center';
+      ctx.fillText(it.score >= 9.995 ? '10' : it.score.toFixed(1), 0, 8);
+      ctx.restore();
       ctx.textAlign = 'left';
     });
 
-    ctx.fillStyle = 'rgba(255,255,255,.42)';
-    ctx.font = `600 22px ${BODY}`;
-    ctx.fillText('Ranked head-to-head on Encore', M, H - 44);
+    ctx.fillStyle = CREAM3;
+    ctx.font = `700 20px ${BODY}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '4px';
+    ctx.fillText('RATED HEAD TO HEAD ON ENCORE', M, H - 44);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
     return new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('export failed'))), 'image/png'));
   }
