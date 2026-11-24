@@ -119,11 +119,9 @@ test('recommendations: similar users’ favourites, with reasons, excluding rate
   assert.ok(g.items.some((i) => i.song.id === 'x'));
 }));
 
-test('charts validate the genre; Most Streamed needs a Last.fm key; config reports what is on', () => withServer({}, async (base) => {
+test('charts reject unknown genres; config reports what is on', () => withServer({}, async (base) => {
   const c = client(base);
-  assert.equal((await c('/api/charts/current?genre=polka')).status, 400);
-  assert.equal((await c('/api/charts/streamed?genre=edm')).status, 404);
-  assert.equal((await c('/api/charts/current?genre=indie')).status, 404, 'no Apple feed for indie');
+  assert.equal((await c('/api/charts?genre=polka')).status, 400);
   const cfg = (await c('/api/config')).data;
   assert.deepEqual([cfg.appleMusic, cfg.spotifyClientId, cfg.lastfm], [false, '', false]);
   assert.deepEqual(cfg.services, { spotify: false, youtube: false, soundcloud: false, amazon: false });

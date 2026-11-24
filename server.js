@@ -21,7 +21,8 @@ const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const Ranking = require('./ranking.js');
 const { recommend } = require('./recommend.js');
-const { byKey: GENRE } = require('./genres.js');
+const Genres = require('./genres.js');
+const { createCharts } = require('./charts');
 const { createBroker, PROVIDERS } = require('./lib/oauth');
 const { createBox } = require('./lib/crypto-box');
 const LOOKUPS = { lastfm: require('./lib/services/lastfm'), spotify: require('./lib/services/spotify'), youtube: require('./lib/services/youtube'), soundcloud: require('./lib/services/soundcloud') };
@@ -222,47 +223,12 @@ async function cachedFetchJson(url, ttlMs = 10 * 60 * 1000) {
   proxyCache.set(url, { t: Date.now(), data });
   return data;
 }
-function toSong(r) {
-  return {
-    id: String(r.trackId), title: r.trackName, artist: r.artistName, album: r.collectionName || '',
-    art: r.artworkUrl100 || '', preview: r.previewUrl || '', url: r.trackViewUrl || '', genre: r.primaryGenreName || '',
-    year: r.releaseDate ? String(r.releaseDate).slice(0, 4) : '', explicit: r.trackExplicitness === 'explicit',
-    artistId: r.artistId ? String(r.artistId) : '', albumId: r.collectionId ? String(r.collectionId) : '',
-  };
-}
-async function lookupSongs(idList, country) {
-  const out = [];
-  for (let i = 0; i < idList.length; i += 100) {
-    const qs = new URLSearchParams({ id: idList.slice(i, i + 100).join(','), country, entity: 'song' });
-    const d = await cachedFetchJson(`https://itunes.apple.com/lookup?${qs}`, 60 * 60 * 1000);
-    const by = {};
-    (d.results || []).filter((r) => r.trackId).forEach((r) => { by[r.trackId] = toSong(r); });
-    idList.slice(i, i + 100).forEach((id) => by[id] && out.push(by[id]));
-  }
-  return out;
-}
-/** Find the Apple Music track for "title by artist". */
-async function resolveTrack(title, artist, country) {
-  const qs = new URLSearchParams({ term: `${artist} ${title}`, media: 'music', entity: 'song', limit: '5', country });
-  const d = await cachedFetchJson(`https://itunes.apple.com/search?${qs}`, 24 * 3600 * 1000);
-  const rs = (d.results || []).filter((r) => r.trackId);
-  const a = artist.toLowerCase();
-  const hit = rs.find((r) => String(r.artistName).toLowerCase().includes(a)) || rs[0];
-  return hit ? toSong(hit) : null;
-}
-async function mapLimit(items, n, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
-    while (i < items.length) { const k = i++; try { out[k] = await fn(items[k], k); } catch { out[k] = null; } }
-  }));
-  return out;
-}
-
 // ---------------- App ----------------
-function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data', 'encore.db'), env = process.env, fetch: fetchImpl = globalThis.fetch, log = console.warn } = {}) {
+function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data', 'encore.db'), env = process.env, fetch: fetchImpl = globalThis.fetch, log = console.warn, scheduleCharts = false, chartOptions = {} } = {}) {
   const db = openDb(dbPath);
   const broker = createBroker({ db, env, fetch: fetchImpl, box: createBox(env.TOKEN_ENCRYPTION_KEY, log), log });
+  const charts = createCharts({ db, env, fetch: fetchImpl, log, ...chartOptions });
+  if (scheduleCharts) charts.schedule();
   const svcLimit = limiter(240, 60 * 1000);
   const secure = env.COOKIE_SECURE === '1';
   const authLimit = limiter(20, 15 * 60 * 1000);
@@ -554,27 +520,11 @@ function createApp({ dbPath = process.env.DATABASE_PATH || path.join(ROOT, 'data
       return res.end(buf);
     }
 
-    // ----- Genre charts -----
-    // /api/charts/current?genre=pop → Apple's top songs in that genre right now.
-    // /api/charts/streamed?genre=pop → Last.fm's all-time top tracks for the tag (needs LASTFM_API_KEY).
-    const ch = p.match(/^\/api\/charts\/(current|streamed)$/);
-    if (ch && m === 'GET') {
-      const g = GENRE[url.searchParams.get('genre') || ''];
-      if (!g) return send(res, 400, { error: 'Unknown genre' });
-      const cc = country(url);
-      if (ch[1] === 'current') {
-        if (!g.appleId) return send(res, 404, { error: 'Apple has no chart feed for this genre' });
-        const feed = await cachedFetchJson(`https://itunes.apple.com/${cc}/rss/topsongs/limit=50/genre=${g.appleId}/json`, 60 * 60 * 1000);
-        const idList = ((feed.feed && feed.feed.entry) || []).map((e) => e.id && e.id.attributes && e.id.attributes['im:id']).filter(Boolean);
-        if (!idList.length) return send(res, 502, { error: 'Empty chart' });
-        return send(res, 200, { source: 'Apple Music', songs: await lookupSongs(idList, cc) });
-      }
-      if (!env.LASTFM_API_KEY) return send(res, 404, { error: 'Most Streamed needs a Last.fm API key' });
-      const qs = new URLSearchParams({ method: 'tag.gettoptracks', tag: g.lastfmTag, api_key: env.LASTFM_API_KEY, format: 'json', limit: '30' });
-      const d = await cachedFetchJson(`https://ws.audioscrobbler.com/2.0/?${qs}`, 6 * 3600 * 1000);
-      const tracks = ((d.tracks && d.tracks.track) || []).map((t) => ({ title: t.name, artist: t.artist && t.artist.name })).filter((t) => t.title && t.artist).slice(0, 25);
-      const songs = (await mapLimit(tracks, 5, (t) => resolveTrack(t.title, t.artist, cc))).filter(Boolean);
-      return send(res, 200, { source: 'Last.fm', songs });
+    // ----- Genre charts: /api/charts?genre=pop (current + most streamed, cached server-side) -----
+    if (p === '/api/charts' && m === 'GET') {
+      const key = url.searchParams.get('genre') || '';
+      if (!Genres.byKey[key]) return send(res, 400, { error: 'Unknown genre' });
+      return send(res, 200, await charts.forGenre(key));
     }
 
     // ----- Apple public catalog proxy (search / lookup / overall chart) -----
@@ -648,10 +598,10 @@ module.exports = { createApp, makeDeveloperToken, appleConfig, cleanState };
 if (require.main === module) {
   require('./lib/env').load(__dirname);
   const port = Number(process.env.PORT) || 3000;
-  createApp().listen(port, () => {
+  createApp({ scheduleCharts: true }).listen(port, () => {
     console.log(`Encore running at http://localhost:${port}`);
     console.log(appleConfig() ? 'Apple Music: enabled' : 'Apple Music: off (set APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY)');
     console.log(process.env.SPOTIFY_CLIENT_ID ? 'Spotify: enabled' : 'Spotify: off (set SPOTIFY_CLIENT_ID)');
-    console.log(process.env.LASTFM_API_KEY ? 'Most Streamed charts: Last.fm' : 'Most Streamed charts: placeholder data (set LASTFM_API_KEY)');
+    console.log(`Charts: Apple Music + Deezer${process.env.KWORB_ENABLED !== '0' ? ' + Kworb (Spotify streams)' : ''}${process.env.LASTFM_API_KEY ? ' + Last.fm' : ''}${process.env.BILLBOARD_PROVIDER ? ' + Billboard' : ''}`);
   });
 }
