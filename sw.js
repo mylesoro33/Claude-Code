@@ -5,7 +5,7 @@
  *  - Album art from Apple's CDN: cached as you browse (capped).
  *  - /api/*: always network (accounts, sync, catalog proxy).
  */
-const VERSION = 'encore-v4';
+const VERSION = 'encore-v5';
 const SHELL = `${VERSION}-shell`;
 const ART = `${VERSION}-art`;
 const ART_MAX = 400;

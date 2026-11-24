@@ -11,11 +11,13 @@ Encore is a music rating app built like a record collection. You never type a nu
 The catalog is **Apple Music's**: search, artwork and 30-second previews come from Apple's public catalog API.
 
 ## Tabs
-- **Home**: search every song on Apple Music; your **recently played** songs from Apple Music (or Spotify),
-  each one tap from "Rate this"; your top records; what's trending.
-- **Charts**: 12 genres (Pop, Rap/Hip-Hop, R&B, Country, Rock, EDM, Latin, Alternative, Indie, Jazz, Gospel, K-Pop),
-  each with a **Current Chart** and **Most Streamed**. Every row has **Rate** and **Add to list**.
-  Each chart says where its data came from, and placeholder data is always labelled.
+- **Home**: search every song on Apple Music; your **recently played** songs from every connected service
+  (and from *Find my account*), each one tap from "Rate this"; your top records; what's trending.
+- **Charts**: *All genres* plus 12 genres (Pop, Rap/Hip-Hop, R&B, Country, Rock, EDM, Latin, Alternative, Indie, Jazz,
+  Gospel, K-Pop), each with a **Current Chart** and **Most Streamed** built from real data. Every song belongs to one
+  genre (its primary artist's tags), so genre charts never repeat each other. Rows show rank, artwork, title, artist,
+  weeks on chart and peak (or the stream count on Most Streamed), plus **Rate** and **Add to list**. Each chart names
+  its source and when it was last updated. No placeholder data.
 - **Lists**: *My Ratings* (songs, plus artist and album averages; drag to re-rank) and *My Lists*:
   your own lists like "Best Rap Song" or "Gym Songs". You can name them, add songs (from search, your ratings
   or any chart), remove songs, re-order them, and make each one public or private.
@@ -24,8 +26,13 @@ The catalog is **Apple Music's**: search, artwork and 30-second previews come fr
   toward rediscoveries (your listening history, songs many similar listeners rate 9+, your favourite artists and genres).
   Every card says why, for example "Because you rated Golden Hour a 10" or "12 people with similar taste rated this 9+".
   New users get the genre charts until they've rated 3 songs. The list refreshes every time you rate.
-- **Profile**: sign up with email, a unique username and a password; avatar, bio, rating count, Top 10, lists,
-  connected services, people search, public/private profile, export/import, and a shareable Top 10 image.
+- **Profile**: sign up with email, a unique username (changeable later) and a password; a profile photo you crop
+  yourself (or the default record avatar), bio, rating count, Top 10, lists, **Connect settings** for
+  Apple Music, Spotify, YouTube Music, SoundCloud and Amazon Music, **Find my account** (rate songs from a public
+  Last.fm, Spotify, YouTube or SoundCloud profile), people search, public/private profile, import, and a
+  shareable Top 10 image.
+- **❤ and Add to playlist** on any song: hearting saves it to your connected libraries (Apple Music library,
+  Spotify Liked Songs, YouTube likes, SoundCloud likes); *Add to playlist* picks or creates a playlist on that service.
 
 ## Run it
 Requires Node 22.13+ and no `npm install` (it uses Node's built-in SQLite).
@@ -33,6 +40,9 @@ Requires Node 22.13+ and no `npm install` (it uses Node's built-in SQLite).
 ```sh
 npm start            # http://localhost:3000
 ```
+
+Copy `.env.example` to `.env` and fill in what you have; **[SETUP.md](SETUP.md)** is the step-by-step checklist
+for every key, secret and redirect URI. Nothing is hardcoded, and anything left blank shows a plain "Not set up" state.
 
 Accounts are stored in `data/encore.db` (set `DATABASE_PATH` to move it, and `COOKIE_SECURE=1` behind HTTPS).
 Host it anywhere that runs Node with a persistent disk (Render with a disk, Fly.io, Railway, a VPS).
@@ -45,34 +55,38 @@ syncing and collaborative-filtering recommendations need the Node server. For in
 put public keys in `config.js` (see below).
 
 ## Plugging in real services
-| What | Server (env var) | GitHub Pages (`config.js`) | Without it |
-| --- | --- | --- | --- |
-| Apple Music sign-in + recently played | `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY_PATH` | `musickitDeveloperToken` (make one with `node scripts/musickit-token.js`) | "Connect Apple Music" explains it isn't set up |
-| Spotify sign-in + recently played | `SPOTIFY_CLIENT_ID` | `spotifyClientId` | Spotify shows "Not set up" |
-| Most Streamed charts (Last.fm) | `LASTFM_API_KEY` | `lastfmApiKey` | Labelled placeholder lists |
-| Current Chart (Apple genre feeds) | built in | tried from the browser | Labelled placeholder lists |
+Full checklist with the developer-portal steps and each service's limits: **[SETUP.md](SETUP.md)**.
 
-- **Apple Music**: you need an Apple Developer Program membership. Create a *Media ID* and a key with
-  *Media Services (MusicKit)*, then download the `.p8`. The server signs short-lived tokens, and the key never reaches the browser.
-- **Spotify**: create an app at developer.spotify.com/dashboard and add your site URL (for example
-  `https://your-app.onrender.com/`) as a Redirect URI. Sign-in uses OAuth with PKCE, so no client secret is needed,
-  and tokens stay in the user's browser.
-- **SoundCloud, YouTube Music, Amazon Music** show **Coming soon**. None of them currently offers a public API
-  for listening history that a new app can use.
-- **Charts data layer**: `js/charts.js` is the only place chart data comes from. To add a provider
-  (Deezer, a paid chart API…), add an entry to its `providers` list.
+| What | Env vars | Without it |
+| --- | --- | --- |
+| Apple Music (MusicKit) | `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY_PATH` | Apple shows "Not set up" |
+| Spotify (OAuth + PKCE) | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | Spotify shows "Not set up" |
+| YouTube Music (Google OAuth) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_API_KEY` | "Not set up" |
+| SoundCloud | `SOUNDCLOUD_CLIENT_ID`, `SOUNDCLOUD_CLIENT_SECRET` | "Not set up" |
+| Amazon Music (closed beta) | `AMAZON_CLIENT_ID`, `AMAZON_CLIENT_SECRET`, `AMAZON_MUSIC_API_KEY` | "Waiting for API access" |
+| Find my account: Last.fm, genre tags, stream counts | `LASTFM_API_KEY` | Last.fm lookups off; genres from Apple only |
+| Billboard charts | `BILLBOARD_PROVIDER`, `BILLBOARD_API_KEY`, `BILLBOARD_API_HOST` | Apple Music genre charts |
+| Spotify stream counts (Kworb) | `KWORB_ENABLED=1` (default on) | Last.fm play counts |
+| Token encryption | `TOKEN_ENCRYPTION_KEY` | A random key each restart (users reconnect) |
+
+On **GitHub Pages** (no server) only `config.js` keys apply: `musickitDeveloperToken`, `spotifyClientId`
+(PKCE in the browser) and `lastfmApiKey`. The Current Chart comes from Deezer's public chart there, and the
+other services and *Find my account* need the server.
 
 ## Code map
 | File | What it does |
 | --- | --- |
 | `ranking.js` | Rating engine: first-song 10, better/worse placement, score re-spread, drag-to-move, migration of old data |
 | `recommend.js` | Collaborative filtering + rediscovery weighting + reasons (used by the server and the browser) |
-| `genres.js` | The 12 chart genres: Apple genre ids, Last.fm tags, labelled sample lists |
-| `server.js` | Accounts, sync, profiles, charts proxy, recommendations, Apple developer tokens |
-| `js/charts.js` | Charts data layer (Apple → Last.fm → labelled placeholder) |
-| `js/services.js` | Connected services (Spotify OAuth PKCE; coming-soon states) |
+| `genres.js` | The chart genres: Apple, Deezer and Billboard ids, Last.fm tags, and the primary-genre rules |
+| `server.js` | Accounts, sync, profiles, connections API, charts API, recommendations, Apple developer tokens |
+| `lib/oauth.js` | OAuth broker: state + PKCE, server-side code exchange, encrypted tokens, quiet refresh |
+| `lib/services/*.js` | One module per service: recent plays, ❤, playlists, public-profile lookup |
+| `charts/index.js` + `charts/sources/*.js` | Server chart data layer: one module per source, genre dedupe, daily/weekly cache, weeks and peak |
+| `js/charts.js` | Client side of the charts (server API, or Deezer + Last.fm on GitHub Pages) |
+| `js/services.js` | Spotify PKCE in the browser, for GitHub Pages only |
 | `js/audio.js` / `js/gestures.js` / `js/motion.js` | Crossfading previews; swipe, drag and pull-to-refresh; motion helpers |
-| `js/sharecard.js` / `js/palette.js` / `js/icons.js` | Top 10 share image; ⌘K palette (desktop); icons |
+| `js/sharecard.js` / `js/palette.js` / `js/icons.js` | Top 10 share image; ⌘K command palette (keyboard only); icons |
 | `app.js` | Screens and state |
 
 Design: warm near-black, cream type and one burnt-orange accent; covers are record sleeves with the vinyl
@@ -81,7 +95,7 @@ Fonts are **Fraunces** (display) and **Archivo** (text), stored in `fonts/` unde
 
 ## Tests
 ```sh
-npm test                          # rating engine, recommendations, server (accounts, lists, profiles, charts, CF)
-node tests/e2e.js [shotsDir]      # every screen in Chromium at 390px and 1280px (Apple + MusicKit mocked); saves screenshots
+npm test                          # rating engine, recommendations, server, service adapters, charts
+node tests/e2e.js [shotsDir]      # every screen in Chromium at 390px and 1280px (every outside API faked); saves screenshots
 node tests/static-e2e.js          # the GitHub Pages build with no server
 ```
